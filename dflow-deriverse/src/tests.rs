@@ -7,7 +7,7 @@ pub mod tests {
 
         use bytemuck::{Pod, Zeroable, bytes_of};
         use dflow_amm_interface::{
-            AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, SwapMode,
+            AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, SwapMode, SwapParams,
         };
         use drv_models::{
             constants::{DF, nulls::NULL_ORDER, trading_limitations::MAX_PRICE},
@@ -17,10 +17,11 @@ pub mod tests {
                 types::PxOrders,
             },
         };
+        use serde_json::to_value;
         use solana_sdk::{account::Account, pubkey::Pubkey};
 
         use crate::{
-            Deriverse,
+            Deriverse, SwapReferralParams,
             helper::get_dec_factor,
             lines_linked_list::Lines,
             tests::tests::integration_tests::config::{TOKEN_A, TOKEN_B},
@@ -82,6 +83,24 @@ pub mod tests {
                 account: default_account_with_object(&header),
                 params: None,
             }
+        }
+
+        fn build_key_account_with_params(params: SwapReferralParams) -> Result<KeyedAccount> {
+            let header = InstrAccountHeader {
+                asset_mint: TOKEN_A.mint,
+                crncy_mint: TOKEN_B.mint,
+                asset_token_id: TOKEN_A.token_id,
+                crncy_token_id: TOKEN_B.token_id,
+                ..Zeroable::zeroed()
+            };
+
+            let params = to_value(params)?;
+
+            Ok(KeyedAccount {
+                key: Pubkey::new_unique(),
+                account: default_account_with_object(&header),
+                params: Some(params),
+            })
         }
 
         impl Deriverse {
@@ -162,6 +181,38 @@ pub mod tests {
                 },
             )
             .unwrap();
+
+            println!("Ctx: {:?}", deriverse.accounts_ctx);
+
+            println!(
+                "Accounts to update: {:?}",
+                deriverse.get_accounts_to_update()
+            );
+        }
+
+        #[test]
+        fn get_accounts_to_update_with_params() {
+            let deriverse = Deriverse::from_keyed_account(
+                &build_key_account_with_params(SwapReferralParams {
+                    fee_rate_factor: 0.0001,
+                    client: Pubkey::new_unique(),
+                    client_mint_token_acc: Pubkey::new_unique(),
+                })
+                .unwrap(),
+                &AmmContext {
+                    clock_ref: ClockRef::default(),
+                },
+            )
+            .unwrap();
+
+            assert_eq!(
+                deriverse
+                    .swap_referral_params
+                    .clone()
+                    .unwrap()
+                    .fee_rate_factor,
+                0.0001
+            );
 
             println!("Ctx: {:?}", deriverse.accounts_ctx);
 
@@ -311,11 +362,15 @@ pub mod tests {
         pub mod test_quote_order_book_only {
             use super::*;
 
-            fn init_deriverse() -> Deriverse {
+            fn init_deriverse(additional_params: Option<SwapReferralParams>) -> Deriverse {
                 let mut accounts_map = AccountMap::with_hasher(ahash::RandomState::new());
 
                 let mut deriverse = Deriverse::from_keyed_account(
-                    &build_key_account(),
+                    &if let Some(params) = additional_params {
+                        build_key_account_with_params(params).unwrap()
+                    } else {
+                        build_key_account()
+                    },
                     &AmmContext {
                         clock_ref: ClockRef::default(),
                     },
@@ -433,12 +488,49 @@ pub mod tests {
 
                 new_deriverse.update(&accounts_map).unwrap();
 
+                new_deriverse.swap_referral_params = deriverse.swap_referral_params;
+
                 new_deriverse
             }
 
             #[test]
+            fn partial_fill_sell_with_swap_fees() {
+                let swap_ref_params = SwapReferralParams {
+                    fee_rate_factor: 0.01,
+                    client: Pubkey::new_unique(),
+                    client_mint_token_acc: Pubkey::new_unique(),
+                };
+
+                let deriverse = init_deriverse(Some(swap_ref_params.clone()));
+
+                let result = deriverse
+                    .quote(&QuoteParams {
+                        amount: 140_000,
+                        input_mint: TOKEN_A.mint,
+                        output_mint: TOKEN_B.mint,
+                        swap_mode: SwapMode::ExactIn,
+                    })
+                    .unwrap();
+
+                let mut expected = (140_000 as f64
+                    / get_dec_factor(TOKEN_A.decs_count as u8) as f64
+                    * (10.4 * 100_000.0 / 140_000.0 + 10.1 * 40_000.0 / 140_000.0)
+                    * get_dec_factor(TOKEN_B.decs_count as u8) as f64)
+                    as u64;
+
+                expected -= (expected as f64 * swap_ref_params.fee_rate_factor) as u64;
+
+                let diff = result.out_amount - expected;
+
+                assert!(
+                    (diff as f64) < expected as f64 * 0.001,
+                    "Calculations are not presize enough"
+                );
+            }
+
+            #[test]
             fn partial_fill_sell() {
-                let deriverse = init_deriverse();
+                let deriverse = init_deriverse(None);
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -464,7 +556,7 @@ pub mod tests {
 
             #[test]
             fn full_fill_sell() {
-                let deriverse = init_deriverse();
+                let deriverse = init_deriverse(None);
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -490,7 +582,7 @@ pub mod tests {
 
             #[test]
             fn partial_fill_buy() {
-                let deriverse = init_deriverse();
+                let deriverse = init_deriverse(None);
 
                 let result = deriverse
                     .quote(&QuoteParams {

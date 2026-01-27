@@ -98,6 +98,22 @@ fn build_key_account() -> KeyedAccount {
      .unwrap();
 ```
 
+### Swap Referral Program
+
+The **Swap Referral Program** allows aggregators to earn fees from each swap instruction they originate.  
+
+**Parameters:**
+- `fee_rate_factor` — must be less than `0.0002` (automatically aligned by the platform).  
+- `fees_taker_authority` — the authority that receives the referral fees.  
+- `fees_taker_ata` — the associated token account of the fee taker.  
+
+All parameters are passed during **Deriverse initialization** via the `KeydAccount.params` field.  
+
+Currently, the **`dflow-amm-interface`** does not support a valid `params` field. However, such functionality exists in the **`jupiter-amm-interface`**. To implement this behavior, you’ll need to include the **`serde`** and **`serde_json`** dependencies.  
+
+If your design allows it, the `fees_taker_authority` and `fees_taker_ata` parameters can be defined as constants to remove external dependencies.
+
+
 ## Testing
 ```bash
 cargo integration_tests

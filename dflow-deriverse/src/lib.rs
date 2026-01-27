@@ -23,6 +23,8 @@ use drv_models::{
 };
 
 use dflow_amm_interface::{AccountMap, Amm, Quote, Side, Swap, SwapAndAccountMetas, SwapParams};
+use serde::{Deserialize, Serialize};
+use serde_json::from_value;
 use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
 
 use crate::{
@@ -106,6 +108,14 @@ impl ContextAccounts {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Referral system on swap. Any client can form a swap transaction with their parameters and receive a part of fees from swap execution
+pub struct SwapReferralParams {
+    fee_rate_factor: f64,
+    client: Pubkey,
+    client_mint_token_acc: Pubkey,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct Deriverse {
     accounts_ctx: ContextAccounts,
@@ -115,6 +125,7 @@ struct Deriverse {
     order_book: OrderBook,
     amm: DeriverseAmm,
     fee_rate_factor: f64,
+    swap_referral_params: Option<SwapReferralParams>,
     a_program_id: Pubkey,
     b_program_id: Pubkey,
 }
@@ -149,6 +160,13 @@ impl Amm for Deriverse {
 
         let accounts_ctx = ContextAccounts::build(instr_header.as_ref());
 
+        let swap_referral_params: Option<SwapReferralParams> =
+            if let Some(ref value) = keyed_account.params {
+                from_value(value.clone())?
+            } else {
+                None
+            };
+
         Ok(Deriverse {
             instr_header,
             accounts_ctx,
@@ -159,6 +177,7 @@ impl Amm for Deriverse {
             fee_rate_factor: 0.0,
             a_program_id: solana_sdk::system_program::id(),
             b_program_id: solana_sdk::system_program::id(),
+            swap_referral_params,
         })
     }
 
@@ -236,6 +255,7 @@ impl Amm for Deriverse {
             order_book,
             amm,
             fee_rate_factor,
+            swap_referral_params,
             ..
         } = self;
 
@@ -468,9 +488,16 @@ impl Amm for Deriverse {
             }
 
             client_tokens += qty;
-            client_mints -= quote_params.amount as i64 - remaining_sum;
+            let traded_sum = quote_params.amount as i64 - remaining_sum;
+            client_mints -= traded_sum;
 
-            client_mints -= total_fees;
+            let additional_fees = if let Some(params) = swap_referral_params {
+                (traded_sum as f64 * params.fee_rate_factor) as i64
+            } else {
+                0
+            };
+
+            client_mints -= total_fees + additional_fees;
         } else if !buy && (price < px || order_book.cross(price, OrderSide::Bid)) {
             let mut remaining_qty = quote_params.amount as i64;
             let mut sum = 0_i64;
@@ -673,7 +700,13 @@ impl Amm for Deriverse {
             client_tokens -= quote_params.amount as i64 - remaining_qty;
             client_mints += sum;
 
-            client_mints -= total_fees;
+            let additional_fees = if let Some(params) = swap_referral_params {
+                (sum as f64 * params.fee_rate_factor) as i64
+            } else {
+                0
+            };
+
+            client_mints -= total_fees + additional_fees;
         }
 
         if client_tokens == 0 || client_mints == 0 {
@@ -704,6 +737,7 @@ impl Amm for Deriverse {
             b_token_state,
             a_program_id,
             b_program_id,
+            swap_referral_params,
             ..
         } = self;
 
@@ -735,7 +769,7 @@ impl Amm for Deriverse {
 
         let root = Pubkey::new_acc(ROOT);
 
-        let account_metas = vec![
+        let mut account_metas = vec![
             AccountMeta {
                 pubkey: *token_transfer_authority,
                 is_signer: true,
@@ -917,6 +951,21 @@ impl Amm for Deriverse {
                 is_writable: false,
             },
         ];
+
+        if let Some(params) = swap_referral_params {
+            account_metas.extend_from_slice(&[
+                AccountMeta {
+                    pubkey: params.client_mint_token_acc,
+                    is_signer: false,
+                    is_writable: true,
+                },
+                AccountMeta {
+                    pubkey: params.client,
+                    is_signer: false,
+                    is_writable: true,
+                },
+            ]);
+        }
 
         Ok(SwapAndAccountMetas {
             swap: Swap::Deriverse {

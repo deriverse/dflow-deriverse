@@ -997,6 +997,8 @@ version = "0.0.1"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
+ "serde",
+ "serde_json",
  "solana-sdk",
 ]
 
@@ -1011,6 +1013,8 @@ dependencies = [
  "drv-models",
  "once_cell",
  "rust_decimal",
+ "serde",
+ "serde_json",
  "solana-client",
  "solana-sdk",
  "solana-system-interface",
