@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Error, Result};
+use serde_json::Value;
 use solana_sdk::clock::Clock;
 use std::collections::HashSet;
 
@@ -142,7 +143,7 @@ impl Clone for Box<dyn Amm + Send + Sync> {
 pub struct KeyedAccount {
     pub key: Pubkey,
     pub account: Account,
-    pub params: Option<()>,
+    pub params: Option<Value>, // serde_json Value parameter was found in jupiter-amm crate, params field is needed for Swap Referral program.
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -150,7 +151,7 @@ pub struct Market {
     pub pubkey: Pubkey,
     pub owner: Pubkey,
     /// Additional data an Amm requires, Amm dependent and decoded in the Amm implementation
-    pub params: Option<()>,
+    pub params: Option<Value>,
 }
 
 impl From<KeyedAccount> for Market {
