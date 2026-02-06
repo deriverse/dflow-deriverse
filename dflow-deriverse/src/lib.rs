@@ -276,7 +276,13 @@ impl Amm for Deriverse {
         let mut client_mints: i64 = 0;
 
         if buy && (price > px || order_book.cross(price, OrderSide::Ask)) {
-            let input_sum = (quote_params.amount as f64 / (1.0 + fee_rate)) as i64;
+            let input_sum = (quote_params.amount as f64
+                / (1.0
+                    + fee_rate
+                    + swap_referral_params
+                        .as_ref()
+                        .map(|params| params.fee_rate_factor)
+                        .unwrap_or(0.0))) as i64;
             let mut remaining_sum = input_sum;
             let mut qty = 0_i64;
             let mut total_fees = 0_i64;
@@ -488,7 +494,7 @@ impl Amm for Deriverse {
             }
 
             client_tokens += qty;
-            let traded_sum = quote_params.amount as i64 - remaining_sum;
+            let traded_sum = input_sum - remaining_sum;
             client_mints -= traded_sum;
 
             let additional_fees = if let Some(params) = swap_referral_params {
@@ -773,7 +779,7 @@ impl Amm for Deriverse {
             AccountMeta {
                 pubkey: *token_transfer_authority,
                 is_signer: true,
-                is_writable: false,
+                is_writable: true,
             },
             AccountMeta {
                 pubkey: root,
