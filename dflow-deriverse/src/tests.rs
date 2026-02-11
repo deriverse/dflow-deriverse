@@ -346,7 +346,6 @@ pub mod tests {
                     begin: 3,
                     ..Zeroable::zeroed()
                 },
-                // empty (line 5)
                 PxOrders {
                     next: NULL_ORDER,
                     prev: NULL_ORDER,
@@ -370,9 +369,7 @@ pub mod tests {
                 ((qty as f64 * lines[line as usize].price as f64) / dec_factor) as i64
             };
 
-            // Bid orders for lines 0 (10.4), 1 (10.1), 3 (10.0)
             let bid_orders: Orders = vec![
-                // --- Line 0 orders (begin=0, qty: 30k+40k+30k = 100k) ---
                 Order {
                     qty: 30_000,
                     sum: sum_for(30_000, 0),
@@ -403,7 +400,6 @@ pub mod tests {
                     sref: 2,
                     ..Zeroable::zeroed()
                 },
-                // --- Line 1 orders (begin=3, qty: 25k+50k+25k = 100k) ---
                 Order {
                     qty: 25_000,
                     sum: sum_for(25_000, 1),
@@ -434,7 +430,6 @@ pub mod tests {
                     sref: 5,
                     ..Zeroable::zeroed()
                 },
-                // --- Line 3 orders (begin=6, qty: 20k+30k+30k+20k = 100k) ---
                 Order {
                     qty: 20_000,
                     sum: sum_for(20_000, 3),
@@ -475,7 +470,6 @@ pub mod tests {
                     sref: 9,
                     ..Zeroable::zeroed()
                 },
-                // --- Empty orders ---
                 Order {
                     order_id: 10,
                     next: NULL_ORDER,
@@ -490,9 +484,7 @@ pub mod tests {
                 },
             ];
 
-            // Ask orders for lines 2 (9.9), 4 (10.1), 6 (10.1)
             let ask_orders: Orders = vec![
-                // --- Line 2 orders (begin=0, qty: 40k+30k+30k = 100k) ---
                 Order {
                     qty: 40_000,
                     sum: sum_for(40_000, 2),
@@ -523,7 +515,6 @@ pub mod tests {
                     sref: 2,
                     ..Zeroable::zeroed()
                 },
-                // --- Line 4 orders (begin=3, qty: 25k+25k+25k+25k = 100k) ---
                 Order {
                     qty: 25_000,
                     sum: sum_for(25_000, 4),
@@ -564,7 +555,6 @@ pub mod tests {
                     sref: 6,
                     ..Zeroable::zeroed()
                 },
-                // --- Line 6 orders (begin=7, qty: 35k+35k+30k = 100k) ---
                 Order {
                     qty: 35_000,
                     sum: sum_for(35_000, 6),
@@ -595,7 +585,6 @@ pub mod tests {
                     sref: 9,
                     ..Zeroable::zeroed()
                 },
-                // --- Empty orders ---
                 Order {
                     order_id: 10,
                     next: NULL_ORDER,
@@ -684,7 +673,6 @@ pub mod tests {
         }
 
         pub mod test_quote_order_book_only {
-            use crate::orders_linked_list::OrdersSugar;
 
             use super::*;
 
@@ -782,9 +770,7 @@ pub mod tests {
                     ((qty as f64 * lines[line as usize].price as f64) / dec_factor) as i64
                 };
 
-                // Bid orders for lines 0 (10.1), 1 (10.4), 3 (10.0)
                 let bid_orders: Orders = vec![
-                    // --- Line 0 orders (begin=0, qty: 30k+40k+30k = 100k) ---
                     Order {
                         qty: 30_000,
                         sum: sum_for(30_000, 0),
@@ -815,7 +801,6 @@ pub mod tests {
                         sref: 2,
                         ..Zeroable::zeroed()
                     },
-                    // --- Line 1 orders (begin=3, qty: 25k+50k+25k = 100k) ---
                     Order {
                         qty: 25_000,
                         sum: sum_for(25_000, 1),
@@ -846,7 +831,6 @@ pub mod tests {
                         sref: 5,
                         ..Zeroable::zeroed()
                     },
-                    // --- Line 3 orders (begin=6, qty: 20k+30k+30k+20k = 100k) ---
                     Order {
                         qty: 20_000,
                         sum: sum_for(20_000, 3),
@@ -887,7 +871,6 @@ pub mod tests {
                         sref: 9,
                         ..Zeroable::zeroed()
                     },
-                    // --- Empty orders ---
                     Order {
                         order_id: 10,
                         next: NULL_ORDER,
@@ -902,9 +885,7 @@ pub mod tests {
                     },
                 ];
 
-                // Ask orders for lines 2 (9.9), 4 (10.1), 6 (10.1)
                 let ask_orders: Orders = vec![
-                    // --- Line 2 orders (begin=0, qty: 40k+30k+30k = 100k) ---
                     Order {
                         qty: 40_000,
                         sum: sum_for(40_000, 2),
@@ -935,7 +916,6 @@ pub mod tests {
                         sref: 2,
                         ..Zeroable::zeroed()
                     },
-                    // --- Line 4 orders (begin=3, qty: 25k+25k+25k+25k = 100k) ---
                     Order {
                         qty: 25_000,
                         sum: sum_for(25_000, 4),
@@ -976,7 +956,6 @@ pub mod tests {
                         sref: 6,
                         ..Zeroable::zeroed()
                     },
-                    // --- Line 6 orders (begin=7, qty: 35k+35k+30k = 100k) ---
                     Order {
                         qty: 35_000,
                         sum: sum_for(35_000, 6),
@@ -1007,7 +986,6 @@ pub mod tests {
                         sref: 9,
                         ..Zeroable::zeroed()
                     },
-                    // --- Empty orders ---
                     Order {
                         order_id: 10,
                         next: NULL_ORDER,
@@ -1466,9 +1444,7 @@ pub mod tests {
                     ((qty as f64 * lines[line as usize].price as f64) / dec_factor) as i64
                 };
 
-                // Bid orders for lines 0 (10.1), 1 (10.4), 3 (10.0)
                 let bid_orders: Orders = vec![
-                    // --- Line 0 orders (begin=0, qty: 30k+40k+30k = 100k) ---
                     Order {
                         qty: 30_000,
                         sum: sum_for(30_000, 0),
@@ -1499,7 +1475,6 @@ pub mod tests {
                         sref: 2,
                         ..Zeroable::zeroed()
                     },
-                    // --- Line 1 orders (begin=3, qty: 25k+50k+25k = 100k) ---
                     Order {
                         qty: 25_000,
                         sum: sum_for(25_000, 1),
@@ -1530,7 +1505,6 @@ pub mod tests {
                         sref: 5,
                         ..Zeroable::zeroed()
                     },
-                    // --- Line 3 orders (begin=6, qty: 20k+30k+30k+20k = 100k) ---
                     Order {
                         qty: 20_000,
                         sum: sum_for(20_000, 3),
@@ -1571,7 +1545,6 @@ pub mod tests {
                         sref: 9,
                         ..Zeroable::zeroed()
                     },
-                    // --- Empty orders ---
                     Order {
                         order_id: 10,
                         next: NULL_ORDER,
@@ -1586,9 +1559,7 @@ pub mod tests {
                     },
                 ];
 
-                // Ask orders for lines 2 (9.9), 4 (10.1), 6 (10.1)
                 let ask_orders: Orders = vec![
-                    // --- Line 2 orders (begin=0, qty: 40k+30k+30k = 100k) ---
                     Order {
                         qty: 40_000,
                         sum: sum_for(40_000, 2),
@@ -1619,7 +1590,6 @@ pub mod tests {
                         sref: 2,
                         ..Zeroable::zeroed()
                     },
-                    // --- Line 4 orders (begin=3, qty: 25k+25k+25k+25k = 100k) ---
                     Order {
                         qty: 25_000,
                         sum: sum_for(25_000, 4),
@@ -1660,7 +1630,6 @@ pub mod tests {
                         sref: 6,
                         ..Zeroable::zeroed()
                     },
-                    // --- Line 6 orders (begin=7, qty: 35k+35k+30k = 100k) ---
                     Order {
                         qty: 35_000,
                         sum: sum_for(35_000, 6),
@@ -1691,7 +1660,6 @@ pub mod tests {
                         sref: 9,
                         ..Zeroable::zeroed()
                     },
-                    // --- Empty orders ---
                     Order {
                         order_id: 10,
                         next: NULL_ORDER,
@@ -1807,10 +1775,10 @@ pub mod tests {
                     1_000_000 * get_dec_factor(TOKEN_A.decs_count as u8);
 
                 deriverse.instr_header.crncy_tokens =
-                    11_000_000 * get_dec_factor(TOKEN_B.decs_count as u8);
+                    10_500_000 * get_dec_factor(TOKEN_B.decs_count as u8);
 
                 deriverse.amm.a_tokens = 1_000_000 * get_dec_factor(TOKEN_A.decs_count as u8);
-                deriverse.amm.b_tokens = 11_000_000 * get_dec_factor(TOKEN_B.decs_count as u8);
+                deriverse.amm.b_tokens = 10_500_000 * get_dec_factor(TOKEN_B.decs_count as u8);
 
                 let result = deriverse
                     .quote(&QuoteParams {
