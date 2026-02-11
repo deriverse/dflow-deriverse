@@ -7,23 +7,26 @@ pub mod tests {
 
         use bytemuck::{Pod, Zeroable, bytes_of};
         use dflow_amm_interface::{
-            AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, SwapMode, SwapParams,
+            AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, SwapMode,
         };
         use drv_models::{
             constants::{DF, nulls::NULL_ORDER, trading_limitations::MAX_PRICE},
             state::{
-                community_account_header::CommunityAccountHeader, instrument::InstrAccountHeader,
-                spots::spot_account_header::SpotTradeAccountHeaderNonGen, token::TokenState,
-                types::PxOrders,
+                community_account_header::CommunityAccountHeader,
+                instrument::InstrAccountHeader,
+                spots::spot_account_header::SpotTradeAccountHeaderNonGen,
+                token::TokenState,
+                types::{Order, PxOrders},
             },
         };
         use serde_json::to_value;
         use solana_sdk::{account::Account, pubkey::Pubkey};
 
         use crate::{
-            Deriverse, SwapReferralParams,
+            Deriverse, InstructionBuilderParams, ParamsWrapper, SwapReferralParams,
             helper::get_dec_factor,
             lines_linked_list::Lines,
+            orders_linked_list::Orders,
             tests::tests::integration_tests::config::{TOKEN_A, TOKEN_B},
         };
 
@@ -53,7 +56,7 @@ pub mod tests {
             Account {
                 lamports: 0,
                 data: bytemuck::bytes_of(object).to_vec(),
-                owner: solana_sdk::system_program::id(),
+                owner: solana_system_interface::program::id(),
                 executable: false,
                 rent_epoch: 0,
             }
@@ -63,13 +66,13 @@ pub mod tests {
             Account {
                 lamports: 0,
                 data,
-                owner: solana_sdk::system_program::id(),
+                owner: solana_system_interface::program::id(),
                 executable: false,
                 rent_epoch: 0,
             }
         }
 
-        fn build_key_account() -> KeyedAccount {
+        fn build_key_account(params: InstructionBuilderParams) -> Result<KeyedAccount> {
             let header = InstrAccountHeader {
                 asset_mint: TOKEN_A.mint,
                 crncy_mint: TOKEN_B.mint,
@@ -78,14 +81,22 @@ pub mod tests {
                 ..Zeroable::zeroed()
             };
 
-            KeyedAccount {
+            let params = to_value(ParamsWrapper {
+                swap_ref_params: None,
+                instruction_builder_params: params,
+            })?;
+
+            Ok(KeyedAccount {
                 key: Pubkey::new_unique(),
                 account: default_account_with_object(&header),
-                params: None,
-            }
+                params: Some(params),
+            })
         }
 
-        fn build_key_account_with_params(params: SwapReferralParams) -> Result<KeyedAccount> {
+        fn build_key_account_with_params(
+            instruction_builder_params: InstructionBuilderParams,
+            swap_referral_params: SwapReferralParams,
+        ) -> Result<KeyedAccount> {
             let header = InstrAccountHeader {
                 asset_mint: TOKEN_A.mint,
                 crncy_mint: TOKEN_B.mint,
@@ -94,7 +105,10 @@ pub mod tests {
                 ..Zeroable::zeroed()
             };
 
-            let params = to_value(params)?;
+            let params = to_value(ParamsWrapper {
+                swap_ref_params: Some(swap_referral_params),
+                instruction_builder_params: instruction_builder_params,
+            })?;
 
             Ok(KeyedAccount {
                 key: Pubkey::new_unique(),
@@ -126,6 +140,8 @@ pub mod tests {
                 &mut self,
                 account_metas: &mut AccountMap,
                 lines: Lines,
+                ask_orderes: Orders,
+                bid_orders: Orders,
                 bid_begin_line: usize,
                 ask_begin_line: usize,
             ) -> Result<()> {
@@ -144,16 +160,47 @@ pub mod tests {
                     .map(|line| line.price)
                     .unwrap_or(0);
 
-                let mut data = bytes_of(&SpotTradeAccountHeaderNonGen {
+                let mut lines_acc = bytes_of(&SpotTradeAccountHeaderNonGen {
                     ..Zeroable::zeroed()
                 })
                 .to_vec();
 
                 lines
                     .iter()
-                    .for_each(|line| data.extend_from_slice(bytes_of(line)));
+                    .for_each(|line| lines_acc.extend_from_slice(bytes_of(line)));
 
-                account_metas.insert(self.accounts_ctx.lines, default_account_with_data(data));
+                account_metas.insert(
+                    self.accounts_ctx.lines,
+                    default_account_with_data(lines_acc),
+                );
+
+                let mut ask_orders_acc = bytes_of(&SpotTradeAccountHeaderNonGen {
+                    ..Zeroable::zeroed()
+                })
+                .to_vec();
+
+                ask_orderes
+                    .iter()
+                    .for_each(|order| ask_orders_acc.extend_from_slice(bytes_of(order)));
+
+                account_metas.insert(
+                    self.accounts_ctx.ask_orders,
+                    default_account_with_data(ask_orders_acc),
+                );
+
+                let mut bid_orders_acc = bytes_of(&SpotTradeAccountHeaderNonGen {
+                    ..Zeroable::zeroed()
+                })
+                .to_vec();
+
+                bid_orders
+                    .iter()
+                    .for_each(|order| bid_orders_acc.extend_from_slice(bytes_of(order)));
+
+                account_metas.insert(
+                    self.accounts_ctx.bid_orders,
+                    default_account_with_data(bid_orders_acc),
+                );
 
                 Ok(())
             }
@@ -175,7 +222,11 @@ pub mod tests {
         #[test]
         fn get_accounts_to_update() {
             let deriverse = Deriverse::from_keyed_account(
-                &build_key_account(),
+                &build_key_account(InstructionBuilderParams {
+                    ata_init: false,
+                    realloc_allowed: true,
+                })
+                .unwrap(),
                 &AmmContext {
                     clock_ref: ClockRef::default(),
                 },
@@ -193,11 +244,17 @@ pub mod tests {
         #[test]
         fn get_accounts_to_update_with_params() {
             let deriverse = Deriverse::from_keyed_account(
-                &build_key_account_with_params(SwapReferralParams {
-                    fee_rate_factor: 0.0001,
-                    client: Pubkey::new_unique(),
-                    client_mint_token_acc: Pubkey::new_unique(),
-                })
+                &build_key_account_with_params(
+                    InstructionBuilderParams {
+                        ata_init: false,
+                        realloc_allowed: true,
+                    },
+                    SwapReferralParams {
+                        fee_rate_factor: 0.0001,
+                        client: Pubkey::new_unique(),
+                        client_mint_token_acc: Pubkey::new_unique(),
+                    },
+                )
                 .unwrap(),
                 &AmmContext {
                     clock_ref: ClockRef::default(),
@@ -227,7 +284,11 @@ pub mod tests {
             let mut accounts_map = AccountMap::with_hasher(ahash::RandomState::new());
 
             let mut deriverse = Deriverse::from_keyed_account(
-                &build_key_account(),
+                &build_key_account(InstructionBuilderParams {
+                    ata_init: false,
+                    realloc_allowed: true,
+                })
+                .unwrap(),
                 &AmmContext {
                     clock_ref: ClockRef::default(),
                 },
@@ -235,64 +296,316 @@ pub mod tests {
             .unwrap();
 
             let lines = vec![
-                // bid
+                // bid (line 0)
                 PxOrders {
                     price: (10.4 * DF) as i64,
                     qty: 100_000,
                     next: 3,
                     prev: 1,
                     sref: 0,
+                    begin: 0,
                     ..Zeroable::zeroed()
                 },
-                // bid
+                // bid (line 1)
                 PxOrders {
                     price: (10.1 * DF) as i64,
                     qty: 100_000,
                     next: 0,
                     prev: NULL_ORDER,
                     sref: 1,
+                    begin: 3,
                     ..Zeroable::zeroed()
                 },
-                // ask
+                // ask (line 2)
                 PxOrders {
                     price: (9.9 * DF) as i64,
                     qty: 100_000,
                     next: 4,
                     prev: NULL_ORDER,
                     sref: 0,
+                    begin: 0,
                     ..Zeroable::zeroed()
                 },
-                // bid
+                // bid (line 3)
                 PxOrders {
                     price: (10.0 * DF) as i64,
                     qty: 100_000,
                     next: NULL_ORDER,
                     prev: 3,
                     sref: 0,
+                    begin: 6,
                     ..Zeroable::zeroed()
                 },
-                // ask
+                // ask (line 4)
                 PxOrders {
                     price: (10.1 * DF) as i64,
                     qty: 100_000,
                     next: 6,
                     prev: NULL_ORDER,
                     sref: 0,
+                    begin: 3,
                     ..Zeroable::zeroed()
                 },
-                // empty
+                // empty (line 5)
                 PxOrders {
                     next: NULL_ORDER,
                     prev: NULL_ORDER,
                     ..Zeroable::zeroed()
                 },
-                // ask
+                // ask (line 6)
                 PxOrders {
                     price: (10.1 * DF) as i64,
                     qty: 100_000,
                     next: NULL_ORDER,
                     prev: 4,
                     sref: 0,
+                    begin: 7,
+                    ..Zeroable::zeroed()
+                },
+            ];
+
+            let dec_factor =
+                get_dec_factor((9 + TOKEN_A.decs_count - TOKEN_B.decs_count) as u8) as f64;
+            let sum_for = |qty: i64, line: u32| {
+                ((qty as f64 * lines[line as usize].price as f64) / dec_factor) as i64
+            };
+
+            // Bid orders for lines 0 (10.4), 1 (10.1), 3 (10.0)
+            let bid_orders: Orders = vec![
+                // --- Line 0 orders (begin=0, qty: 30k+40k+30k = 100k) ---
+                Order {
+                    qty: 30_000,
+                    sum: sum_for(30_000, 0),
+                    order_id: 0,
+                    line: 0,
+                    prev: NULL_ORDER,
+                    next: 1,
+                    sref: 0,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 40_000,
+                    sum: sum_for(40_000, 0),
+                    order_id: 1,
+                    line: 0,
+                    prev: 0,
+                    next: 2,
+                    sref: 1,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 30_000,
+                    sum: sum_for(30_000, 0),
+                    order_id: 2,
+                    line: 0,
+                    prev: 1,
+                    next: NULL_ORDER,
+                    sref: 2,
+                    ..Zeroable::zeroed()
+                },
+                // --- Line 1 orders (begin=3, qty: 25k+50k+25k = 100k) ---
+                Order {
+                    qty: 25_000,
+                    sum: sum_for(25_000, 1),
+                    order_id: 3,
+                    line: 1,
+                    prev: NULL_ORDER,
+                    next: 4,
+                    sref: 3,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 50_000,
+                    sum: sum_for(50_000, 1),
+                    order_id: 4,
+                    line: 1,
+                    prev: 3,
+                    next: 5,
+                    sref: 4,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 25_000,
+                    sum: sum_for(25_000, 1),
+                    order_id: 5,
+                    line: 1,
+                    prev: 4,
+                    next: NULL_ORDER,
+                    sref: 5,
+                    ..Zeroable::zeroed()
+                },
+                // --- Line 3 orders (begin=6, qty: 20k+30k+30k+20k = 100k) ---
+                Order {
+                    qty: 20_000,
+                    sum: sum_for(20_000, 3),
+                    order_id: 6,
+                    line: 3,
+                    prev: NULL_ORDER,
+                    next: 7,
+                    sref: 6,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 30_000,
+                    sum: sum_for(30_000, 3),
+                    order_id: 7,
+                    line: 3,
+                    prev: 6,
+                    next: 8,
+                    sref: 7,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 30_000,
+                    sum: sum_for(30_000, 3),
+                    order_id: 8,
+                    line: 3,
+                    prev: 7,
+                    next: 9,
+                    sref: 8,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 20_000,
+                    sum: sum_for(20_000, 3),
+                    order_id: 9,
+                    line: 3,
+                    prev: 8,
+                    next: NULL_ORDER,
+                    sref: 9,
+                    ..Zeroable::zeroed()
+                },
+                // --- Empty orders ---
+                Order {
+                    order_id: 10,
+                    next: NULL_ORDER,
+                    prev: NULL_ORDER,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    order_id: 11,
+                    next: NULL_ORDER,
+                    prev: NULL_ORDER,
+                    ..Zeroable::zeroed()
+                },
+            ];
+
+            // Ask orders for lines 2 (9.9), 4 (10.1), 6 (10.1)
+            let ask_orders: Orders = vec![
+                // --- Line 2 orders (begin=0, qty: 40k+30k+30k = 100k) ---
+                Order {
+                    qty: 40_000,
+                    sum: sum_for(40_000, 2),
+                    order_id: 0,
+                    line: 2,
+                    prev: NULL_ORDER,
+                    next: 1,
+                    sref: 0,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 30_000,
+                    sum: sum_for(30_000, 2),
+                    order_id: 1,
+                    line: 2,
+                    prev: 0,
+                    next: 2,
+                    sref: 1,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 30_000,
+                    sum: sum_for(30_000, 2),
+                    order_id: 2,
+                    line: 2,
+                    prev: 1,
+                    next: NULL_ORDER,
+                    sref: 2,
+                    ..Zeroable::zeroed()
+                },
+                // --- Line 4 orders (begin=3, qty: 25k+25k+25k+25k = 100k) ---
+                Order {
+                    qty: 25_000,
+                    sum: sum_for(25_000, 4),
+                    order_id: 3,
+                    line: 4,
+                    prev: NULL_ORDER,
+                    next: 4,
+                    sref: 3,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 25_000,
+                    sum: sum_for(25_000, 4),
+                    order_id: 4,
+                    line: 4,
+                    prev: 3,
+                    next: 5,
+                    sref: 4,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 25_000,
+                    sum: sum_for(25_000, 4),
+                    order_id: 5,
+                    line: 4,
+                    prev: 4,
+                    next: 6,
+                    sref: 5,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 25_000,
+                    sum: sum_for(25_000, 4),
+                    order_id: 6,
+                    line: 4,
+                    prev: 5,
+                    next: NULL_ORDER,
+                    sref: 6,
+                    ..Zeroable::zeroed()
+                },
+                // --- Line 6 orders (begin=7, qty: 35k+35k+30k = 100k) ---
+                Order {
+                    qty: 35_000,
+                    sum: sum_for(35_000, 6),
+                    order_id: 7,
+                    line: 6,
+                    prev: NULL_ORDER,
+                    next: 8,
+                    sref: 7,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 35_000,
+                    sum: sum_for(35_000, 6),
+                    order_id: 8,
+                    line: 6,
+                    prev: 7,
+                    next: 9,
+                    sref: 8,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    qty: 30_000,
+                    sum: sum_for(30_000, 6),
+                    order_id: 9,
+                    line: 6,
+                    prev: 8,
+                    next: NULL_ORDER,
+                    sref: 9,
+                    ..Zeroable::zeroed()
+                },
+                // --- Empty orders ---
+                Order {
+                    order_id: 10,
+                    next: NULL_ORDER,
+                    prev: NULL_ORDER,
+                    ..Zeroable::zeroed()
+                },
+                Order {
+                    order_id: 11,
+                    next: NULL_ORDER,
+                    prev: NULL_ORDER,
                     ..Zeroable::zeroed()
                 },
             ];
@@ -305,7 +618,14 @@ pub mod tests {
                 11 * get_dec_factor(TOKEN_A.decs_count as u8),
             );
             deriverse
-                .init_order_book(&mut accounts_map, lines.clone(), 1, 2)
+                .init_order_book(
+                    &mut accounts_map,
+                    lines.clone(),
+                    ask_orders,
+                    bid_orders,
+                    1,
+                    2,
+                )
                 .unwrap();
 
             accounts_map.insert(
@@ -330,7 +650,11 @@ pub mod tests {
             );
 
             let mut new_deriverse = Deriverse::from_keyed_account(
-                &build_key_account(),
+                &build_key_account(InstructionBuilderParams {
+                    ata_init: false,
+                    realloc_allowed: true,
+                })
+                .unwrap(),
                 &AmmContext {
                     clock_ref: ClockRef::default(),
                 },
@@ -360,16 +684,22 @@ pub mod tests {
         }
 
         pub mod test_quote_order_book_only {
+            use crate::orders_linked_list::OrdersSugar;
+
             use super::*;
 
-            fn init_deriverse(additional_params: Option<SwapReferralParams>) -> Deriverse {
+            fn init_deriverse(
+                instruction_builder_params: InstructionBuilderParams,
+                additional_params: Option<SwapReferralParams>,
+            ) -> Deriverse {
                 let mut accounts_map = AccountMap::with_hasher(ahash::RandomState::new());
 
                 let mut deriverse = Deriverse::from_keyed_account(
                     &if let Some(params) = additional_params {
-                        build_key_account_with_params(params).unwrap()
+                        build_key_account_with_params(instruction_builder_params.clone(), params)
+                            .unwrap()
                     } else {
-                        build_key_account()
+                        build_key_account(instruction_builder_params.clone()).unwrap()
                     },
                     &AmmContext {
                         clock_ref: ClockRef::default(),
@@ -378,74 +708,341 @@ pub mod tests {
                 .unwrap();
 
                 let lines = vec![
-                    // bid
+                    // bid (line 0)
                     PxOrders {
                         price: (10.1 * DF) as i64,
                         qty: 100_000,
                         next: 3,
                         prev: 1,
                         sref: 0,
+                        begin: 0,
                         ..Zeroable::zeroed()
                     },
-                    // bid
+                    // bid (line 1)
                     PxOrders {
                         price: (10.4 * DF) as i64,
                         qty: 100_000,
                         next: 0,
                         prev: NULL_ORDER,
                         sref: 1,
+                        begin: 3,
                         ..Zeroable::zeroed()
                     },
-                    // ask
+                    // ask (line 2)
                     PxOrders {
                         price: (9.9 * DF) as i64,
                         qty: 100_000,
                         next: 4,
                         prev: NULL_ORDER,
                         sref: 0,
+                        begin: 0,
                         ..Zeroable::zeroed()
                     },
-                    // bid
+                    // bid (line 3)
                     PxOrders {
                         price: (10.0 * DF) as i64,
                         qty: 100_000,
                         next: NULL_ORDER,
                         prev: 3,
                         sref: 0,
+                        begin: 6,
                         ..Zeroable::zeroed()
                     },
-                    // ask
+                    // ask (line 4)
                     PxOrders {
                         price: (10.1 * DF) as i64,
                         qty: 100_000,
                         next: 6,
                         prev: NULL_ORDER,
                         sref: 0,
+                        begin: 3,
                         ..Zeroable::zeroed()
                     },
-                    // empty
+                    // empty (line 5)
                     PxOrders {
                         next: NULL_ORDER,
                         prev: NULL_ORDER,
                         ..Zeroable::zeroed()
                     },
-                    // ask
+                    // ask (line 6)
                     PxOrders {
                         price: (10.1 * DF) as i64,
                         qty: 100_000,
                         next: NULL_ORDER,
                         prev: 4,
                         sref: 0,
+                        begin: 7,
                         ..Zeroable::zeroed()
                     },
                 ];
+
+                let dec_factor =
+                    get_dec_factor((9 + TOKEN_A.decs_count - TOKEN_B.decs_count) as u8) as f64;
+                let sum_for = |qty: i64, line: u32| {
+                    ((qty as f64 * lines[line as usize].price as f64) / dec_factor) as i64
+                };
+
+                // Bid orders for lines 0 (10.1), 1 (10.4), 3 (10.0)
+                let bid_orders: Orders = vec![
+                    // --- Line 0 orders (begin=0, qty: 30k+40k+30k = 100k) ---
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 0),
+                        order_id: 0,
+                        line: 0,
+                        prev: NULL_ORDER,
+                        next: 1,
+                        sref: 0,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 40_000,
+                        sum: sum_for(40_000, 0),
+                        order_id: 1,
+                        line: 0,
+                        prev: 0,
+                        next: 2,
+                        sref: 1,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 0),
+                        order_id: 2,
+                        line: 0,
+                        prev: 1,
+                        next: NULL_ORDER,
+                        sref: 2,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Line 1 orders (begin=3, qty: 25k+50k+25k = 100k) ---
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 1),
+                        order_id: 3,
+                        line: 1,
+                        prev: NULL_ORDER,
+                        next: 4,
+                        sref: 3,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 50_000,
+                        sum: sum_for(50_000, 1),
+                        order_id: 4,
+                        line: 1,
+                        prev: 3,
+                        next: 5,
+                        sref: 4,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 1),
+                        order_id: 5,
+                        line: 1,
+                        prev: 4,
+                        next: NULL_ORDER,
+                        sref: 5,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Line 3 orders (begin=6, qty: 20k+30k+30k+20k = 100k) ---
+                    Order {
+                        qty: 20_000,
+                        sum: sum_for(20_000, 3),
+                        order_id: 6,
+                        line: 3,
+                        prev: NULL_ORDER,
+                        next: 7,
+                        sref: 6,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 3),
+                        order_id: 7,
+                        line: 3,
+                        prev: 6,
+                        next: 8,
+                        sref: 7,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 3),
+                        order_id: 8,
+                        line: 3,
+                        prev: 7,
+                        next: 9,
+                        sref: 8,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 20_000,
+                        sum: sum_for(20_000, 3),
+                        order_id: 9,
+                        line: 3,
+                        prev: 8,
+                        next: NULL_ORDER,
+                        sref: 9,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Empty orders ---
+                    Order {
+                        order_id: 10,
+                        next: NULL_ORDER,
+                        prev: NULL_ORDER,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        order_id: 11,
+                        next: NULL_ORDER,
+                        prev: NULL_ORDER,
+                        ..Zeroable::zeroed()
+                    },
+                ];
+
+                // Ask orders for lines 2 (9.9), 4 (10.1), 6 (10.1)
+                let ask_orders: Orders = vec![
+                    // --- Line 2 orders (begin=0, qty: 40k+30k+30k = 100k) ---
+                    Order {
+                        qty: 40_000,
+                        sum: sum_for(40_000, 2),
+                        order_id: 0,
+                        line: 2,
+                        prev: NULL_ORDER,
+                        next: 1,
+                        sref: 0,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 2),
+                        order_id: 1,
+                        line: 2,
+                        prev: 0,
+                        next: 2,
+                        sref: 1,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 2),
+                        order_id: 2,
+                        line: 2,
+                        prev: 1,
+                        next: NULL_ORDER,
+                        sref: 2,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Line 4 orders (begin=3, qty: 25k+25k+25k+25k = 100k) ---
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 4),
+                        order_id: 3,
+                        line: 4,
+                        prev: NULL_ORDER,
+                        next: 4,
+                        sref: 3,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 4),
+                        order_id: 4,
+                        line: 4,
+                        prev: 3,
+                        next: 5,
+                        sref: 4,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 4),
+                        order_id: 5,
+                        line: 4,
+                        prev: 4,
+                        next: 6,
+                        sref: 5,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 4),
+                        order_id: 6,
+                        line: 4,
+                        prev: 5,
+                        next: NULL_ORDER,
+                        sref: 6,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Line 6 orders (begin=7, qty: 35k+35k+30k = 100k) ---
+                    Order {
+                        qty: 35_000,
+                        sum: sum_for(35_000, 6),
+                        order_id: 7,
+                        line: 6,
+                        prev: NULL_ORDER,
+                        next: 8,
+                        sref: 7,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 35_000,
+                        sum: sum_for(35_000, 6),
+                        order_id: 8,
+                        line: 6,
+                        prev: 7,
+                        next: 9,
+                        sref: 8,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 6),
+                        order_id: 9,
+                        line: 6,
+                        prev: 8,
+                        next: NULL_ORDER,
+                        sref: 9,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Empty orders ---
+                    Order {
+                        order_id: 10,
+                        next: NULL_ORDER,
+                        prev: NULL_ORDER,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        order_id: 11,
+                        next: NULL_ORDER,
+                        prev: NULL_ORDER,
+                        ..Zeroable::zeroed()
+                    },
+                ];
+
+                let orders_sum = bid_orders[0].sum + bid_orders[1].sum + bid_orders[2].sum;
+                println!("Order sum {}", orders_sum);
+
+                let lines_sum = ((100_000 as f64 * (10.1 * DF) as f64) / dec_factor) as i64;
+                println!("Line sum: {}", lines_sum);
+
+                assert_eq!(orders_sum, lines_sum);
 
                 deriverse
                     .init_community_header(0, &mut accounts_map)
                     .unwrap();
                 deriverse.init_amm(0, 0);
                 deriverse
-                    .init_order_book(&mut accounts_map, lines.clone(), 1, 2)
+                    .init_order_book(
+                        &mut accounts_map,
+                        lines.clone(),
+                        ask_orders,
+                        bid_orders,
+                        1,
+                        2,
+                    )
                     .unwrap();
 
                 accounts_map.insert(
@@ -479,7 +1076,7 @@ pub mod tests {
                 );
 
                 let mut new_deriverse = Deriverse::from_keyed_account(
-                    &build_key_account(),
+                    &build_key_account(instruction_builder_params).unwrap(),
                     &AmmContext {
                         clock_ref: ClockRef::default(),
                     },
@@ -501,7 +1098,13 @@ pub mod tests {
                     client_mint_token_acc: Pubkey::new_unique(),
                 };
 
-                let deriverse = init_deriverse(Some(swap_ref_params.clone()));
+                let deriverse = init_deriverse(
+                    InstructionBuilderParams {
+                        ata_init: false,
+                        realloc_allowed: true,
+                    },
+                    Some(swap_ref_params.clone()),
+                );
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -520,7 +1123,10 @@ pub mod tests {
 
                 expected -= (expected as f64 * swap_ref_params.fee_rate_factor) as u64;
 
-                let diff = result.out_amount - expected;
+                let diff = (result.out_amount as i64 - expected as i64).abs();
+
+                println!("Expected: {}", expected);
+                println!("Result:   {}", result.out_amount);
 
                 assert!(
                     (diff as f64) < expected as f64 * 0.001,
@@ -530,7 +1136,13 @@ pub mod tests {
 
             #[test]
             fn partial_fill_sell() {
-                let deriverse = init_deriverse(None);
+                let deriverse = init_deriverse(
+                    InstructionBuilderParams {
+                        ata_init: false,
+                        realloc_allowed: false,
+                    },
+                    None,
+                );
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -556,7 +1168,13 @@ pub mod tests {
 
             #[test]
             fn full_fill_sell() {
-                let deriverse = init_deriverse(None);
+                let deriverse = init_deriverse(
+                    InstructionBuilderParams {
+                        ata_init: false,
+                        realloc_allowed: false,
+                    },
+                    None,
+                );
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -582,7 +1200,13 @@ pub mod tests {
 
             #[test]
             fn partial_fill_buy() {
-                let deriverse = init_deriverse(None);
+                let deriverse = init_deriverse(
+                    InstructionBuilderParams {
+                        ata_init: false,
+                        realloc_allowed: false,
+                    },
+                    None,
+                );
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -614,7 +1238,11 @@ pub mod tests {
                 let mut accounts_map = AccountMap::with_hasher(ahash::RandomState::new());
 
                 let mut deriverse = Deriverse::from_keyed_account(
-                    &build_key_account(),
+                    &build_key_account(InstructionBuilderParams {
+                        ata_init: false,
+                        realloc_allowed: true,
+                    })
+                    .unwrap(),
                     &AmmContext {
                         clock_ref: ClockRef::default(),
                     },
@@ -631,7 +1259,7 @@ pub mod tests {
                     10_000_000 * get_dec_factor(TOKEN_B.decs_count as u8),
                 );
                 deriverse
-                    .init_order_book(&mut accounts_map, lines.clone(), 0, 0)
+                    .init_order_book(&mut accounts_map, lines.clone(), vec![], vec![], 0, 0)
                     .unwrap();
 
                 accounts_map.insert(
@@ -665,7 +1293,11 @@ pub mod tests {
                 );
 
                 let mut new_deriverse = Deriverse::from_keyed_account(
-                    &build_key_account(),
+                    &build_key_account(InstructionBuilderParams {
+                        ata_init: false,
+                        realloc_allowed: true,
+                    })
+                    .unwrap(),
                     &AmmContext {
                         clock_ref: ClockRef::default(),
                     },
@@ -748,7 +1380,11 @@ pub mod tests {
                 let mut accounts_map = AccountMap::with_hasher(ahash::RandomState::new());
 
                 let mut deriverse = Deriverse::from_keyed_account(
-                    &build_key_account(),
+                    &build_key_account(InstructionBuilderParams {
+                        ata_init: false,
+                        realloc_allowed: true,
+                    })
+                    .unwrap(),
                     &AmmContext {
                         clock_ref: ClockRef::default(),
                     },
@@ -756,64 +1392,316 @@ pub mod tests {
                 .unwrap();
 
                 let lines = vec![
-                    // bid
+                    // bid (line 0)
                     PxOrders {
                         price: (10.1 * DF) as i64,
                         qty: 100_000,
                         next: 3,
                         prev: 1,
                         sref: 0,
+                        begin: 0,
                         ..Zeroable::zeroed()
                     },
-                    // bid
+                    // bid (line 1)
                     PxOrders {
                         price: (10.4 * DF) as i64,
                         qty: 100_000,
                         next: 0,
                         prev: NULL_ORDER,
                         sref: 1,
+                        begin: 3,
                         ..Zeroable::zeroed()
                     },
-                    // ask
+                    // ask (line 2)
                     PxOrders {
                         price: (9.9 * DF) as i64,
                         qty: 100_000,
                         next: 4,
                         prev: NULL_ORDER,
                         sref: 0,
+                        begin: 0,
                         ..Zeroable::zeroed()
                     },
-                    // bid
+                    // bid (line 3)
                     PxOrders {
                         price: (10.0 * DF) as i64,
                         qty: 100_000,
                         next: NULL_ORDER,
                         prev: 3,
                         sref: 0,
+                        begin: 6,
                         ..Zeroable::zeroed()
                     },
-                    // ask
+                    // ask (line 4)
                     PxOrders {
                         price: (10.1 * DF) as i64,
                         qty: 100_000,
                         next: 6,
                         prev: NULL_ORDER,
                         sref: 0,
+                        begin: 3,
                         ..Zeroable::zeroed()
                     },
-                    // empty
+                    // empty (line 5)
                     PxOrders {
                         next: NULL_ORDER,
                         prev: NULL_ORDER,
                         ..Zeroable::zeroed()
                     },
-                    // ask
+                    // ask (line 6)
                     PxOrders {
                         price: (10.1 * DF) as i64,
                         qty: 100_000,
                         next: NULL_ORDER,
                         prev: 4,
                         sref: 0,
+                        begin: 7,
+                        ..Zeroable::zeroed()
+                    },
+                ];
+
+                let dec_factor =
+                    get_dec_factor((9 + TOKEN_A.decs_count - TOKEN_B.decs_count) as u8) as f64;
+                let sum_for = |qty: i64, line: u32| {
+                    ((qty as f64 * lines[line as usize].price as f64) / dec_factor) as i64
+                };
+
+                // Bid orders for lines 0 (10.1), 1 (10.4), 3 (10.0)
+                let bid_orders: Orders = vec![
+                    // --- Line 0 orders (begin=0, qty: 30k+40k+30k = 100k) ---
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 0),
+                        order_id: 0,
+                        line: 0,
+                        prev: NULL_ORDER,
+                        next: 1,
+                        sref: 0,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 40_000,
+                        sum: sum_for(40_000, 0),
+                        order_id: 1,
+                        line: 0,
+                        prev: 0,
+                        next: 2,
+                        sref: 1,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 0),
+                        order_id: 2,
+                        line: 0,
+                        prev: 1,
+                        next: NULL_ORDER,
+                        sref: 2,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Line 1 orders (begin=3, qty: 25k+50k+25k = 100k) ---
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 1),
+                        order_id: 3,
+                        line: 1,
+                        prev: NULL_ORDER,
+                        next: 4,
+                        sref: 3,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 50_000,
+                        sum: sum_for(50_000, 1),
+                        order_id: 4,
+                        line: 1,
+                        prev: 3,
+                        next: 5,
+                        sref: 4,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 1),
+                        order_id: 5,
+                        line: 1,
+                        prev: 4,
+                        next: NULL_ORDER,
+                        sref: 5,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Line 3 orders (begin=6, qty: 20k+30k+30k+20k = 100k) ---
+                    Order {
+                        qty: 20_000,
+                        sum: sum_for(20_000, 3),
+                        order_id: 6,
+                        line: 3,
+                        prev: NULL_ORDER,
+                        next: 7,
+                        sref: 6,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 3),
+                        order_id: 7,
+                        line: 3,
+                        prev: 6,
+                        next: 8,
+                        sref: 7,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 3),
+                        order_id: 8,
+                        line: 3,
+                        prev: 7,
+                        next: 9,
+                        sref: 8,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 20_000,
+                        sum: sum_for(20_000, 3),
+                        order_id: 9,
+                        line: 3,
+                        prev: 8,
+                        next: NULL_ORDER,
+                        sref: 9,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Empty orders ---
+                    Order {
+                        order_id: 10,
+                        next: NULL_ORDER,
+                        prev: NULL_ORDER,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        order_id: 11,
+                        next: NULL_ORDER,
+                        prev: NULL_ORDER,
+                        ..Zeroable::zeroed()
+                    },
+                ];
+
+                // Ask orders for lines 2 (9.9), 4 (10.1), 6 (10.1)
+                let ask_orders: Orders = vec![
+                    // --- Line 2 orders (begin=0, qty: 40k+30k+30k = 100k) ---
+                    Order {
+                        qty: 40_000,
+                        sum: sum_for(40_000, 2),
+                        order_id: 0,
+                        line: 2,
+                        prev: NULL_ORDER,
+                        next: 1,
+                        sref: 0,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 2),
+                        order_id: 1,
+                        line: 2,
+                        prev: 0,
+                        next: 2,
+                        sref: 1,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 2),
+                        order_id: 2,
+                        line: 2,
+                        prev: 1,
+                        next: NULL_ORDER,
+                        sref: 2,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Line 4 orders (begin=3, qty: 25k+25k+25k+25k = 100k) ---
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 4),
+                        order_id: 3,
+                        line: 4,
+                        prev: NULL_ORDER,
+                        next: 4,
+                        sref: 3,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 4),
+                        order_id: 4,
+                        line: 4,
+                        prev: 3,
+                        next: 5,
+                        sref: 4,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 4),
+                        order_id: 5,
+                        line: 4,
+                        prev: 4,
+                        next: 6,
+                        sref: 5,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 25_000,
+                        sum: sum_for(25_000, 4),
+                        order_id: 6,
+                        line: 4,
+                        prev: 5,
+                        next: NULL_ORDER,
+                        sref: 6,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Line 6 orders (begin=7, qty: 35k+35k+30k = 100k) ---
+                    Order {
+                        qty: 35_000,
+                        sum: sum_for(35_000, 6),
+                        order_id: 7,
+                        line: 6,
+                        prev: NULL_ORDER,
+                        next: 8,
+                        sref: 7,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 35_000,
+                        sum: sum_for(35_000, 6),
+                        order_id: 8,
+                        line: 6,
+                        prev: 7,
+                        next: 9,
+                        sref: 8,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        qty: 30_000,
+                        sum: sum_for(30_000, 6),
+                        order_id: 9,
+                        line: 6,
+                        prev: 8,
+                        next: NULL_ORDER,
+                        sref: 9,
+                        ..Zeroable::zeroed()
+                    },
+                    // --- Empty orders ---
+                    Order {
+                        order_id: 10,
+                        next: NULL_ORDER,
+                        prev: NULL_ORDER,
+                        ..Zeroable::zeroed()
+                    },
+                    Order {
+                        order_id: 11,
+                        next: NULL_ORDER,
+                        prev: NULL_ORDER,
                         ..Zeroable::zeroed()
                     },
                 ];
@@ -826,7 +1714,14 @@ pub mod tests {
                     10_000_000 * get_dec_factor(TOKEN_B.decs_count as u8),
                 );
                 deriverse
-                    .init_order_book(&mut accounts_map, lines.clone(), 0, 0)
+                    .init_order_book(
+                        &mut accounts_map,
+                        lines.clone(),
+                        ask_orders,
+                        bid_orders,
+                        0,
+                        0,
+                    )
                     .unwrap();
 
                 accounts_map.insert(
@@ -860,7 +1755,11 @@ pub mod tests {
                 );
 
                 let mut new_deriverse = Deriverse::from_keyed_account(
-                    &build_key_account(),
+                    &build_key_account(InstructionBuilderParams {
+                        ata_init: false,
+                        realloc_allowed: true,
+                    })
+                    .unwrap(),
                     &AmmContext {
                         clock_ref: ClockRef::default(),
                     },
@@ -954,9 +1853,9 @@ pub mod tests {
             types::account_type::INSTR,
         };
         use once_cell::sync::Lazy;
-        use solana_client::rpc_client::RpcClient;
+        use serde_json::to_value;
+        use solana_client::{rpc_client::RpcClient, rpc_config::CommitmentConfig};
         use solana_sdk::{
-            commitment_config::CommitmentConfig,
             instruction::Instruction,
             pubkey::Pubkey,
             signature::Keypair,
@@ -966,7 +1865,7 @@ pub mod tests {
         use spl_associated_token_account::get_associated_token_address_with_program_id;
 
         use crate::{
-            Deriverse,
+            Deriverse, InstructionBuilderParams, ParamsWrapper,
             custom_sdk::{
                 deposit::{DepositBuildContext, DepositContext},
                 new_spot_order::{NewSpotOrderBuildContext, NewSpotOrderContext},
@@ -1023,10 +1922,19 @@ pub mod tests {
             let keyd_addr = Pubkey::new_spot_acc(INSTR, a_token_state.id, b_token_state.id);
             let keyd_acc = RPC.get_account(&keyd_addr).unwrap();
 
+            let params = to_value(ParamsWrapper {
+                swap_ref_params: None,
+                instruction_builder_params: InstructionBuilderParams {
+                    ata_init: false,
+                    realloc_allowed: true,
+                },
+            })
+            .unwrap();
+
             KeyedAccount {
                 key: keyd_addr,
                 account: keyd_acc,
-                params: None,
+                params: Some(params),
             }
         }
 
@@ -1095,7 +2003,7 @@ pub mod tests {
         }
 
         #[test]
-        fn test_deriverse() {
+        fn test_build_key_account() {
             let keyd_account = build_key_account();
 
             let mut deriverse = Deriverse::from_keyed_account(
@@ -1105,8 +2013,6 @@ pub mod tests {
                 },
             )
             .unwrap();
-
-            init_deriverse();
 
             let accounts_to_update = deriverse.get_accounts_to_update();
 
@@ -1124,7 +2030,41 @@ pub mod tests {
 
             deriverse.update(&accounts_map).unwrap();
 
-            let in_amount = get_dec_factor((deriverse.b_token_state.mask & 0xFF) as u8) as u64;
+            println!("Ask Orders: {:?}", deriverse.order_book.ask_orders);
+            println!("Bid Orders: {:?}", deriverse.order_book.bid_orders);
+        }
+
+        #[test]
+        fn test_deriverse() {
+            let keyd_account = build_key_account();
+
+            let mut deriverse = Deriverse::from_keyed_account(
+                &keyd_account,
+                &AmmContext {
+                    clock_ref: ClockRef::default(),
+                },
+            )
+            .unwrap();
+
+            // init_deriverse();
+
+            let accounts_to_update = deriverse.get_accounts_to_update();
+
+            let accounts_map = RPC
+                .get_multiple_accounts(&accounts_to_update)
+                .unwrap()
+                .iter()
+                .enumerate()
+                .fold(HashMap::new(), |mut m, (index, account)| {
+                    if let Some(account) = account {
+                        m.insert(accounts_to_update[index], account.clone());
+                    }
+                    m
+                });
+
+            deriverse.update(&accounts_map).unwrap();
+
+            let in_amount = get_dec_factor((deriverse.b_token_state.mask & 0xFF) as u8) as u64 - 2;
 
             let quote_result = deriverse
                 .quote(&dflow_amm_interface::QuoteParams {

@@ -1,10 +1,8 @@
 use anyhow::{Result, anyhow, bail};
 use bytemuck::{Pod, Zeroable};
 use drv_models::{
-    constants::{
-        instructions::{DrvInstruction, SwapInstruction},
-        voting::FEE_RATE_STEP,
-    },
+    constants::voting::FEE_RATE_STEP,
+    instruction_constants::{DrvInstruction, SwapInstruction},
     instruction_data::SwapData,
     new_types::instrument::InstrId,
     state::{
@@ -25,17 +23,22 @@ use drv_models::{
 use dflow_amm_interface::{AccountMap, Amm, Quote, Side, Swap, SwapAndAccountMetas, SwapParams};
 use serde::{Deserialize, Serialize};
 use serde_json::from_value;
-use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
+use solana_sdk::{
+    instruction::{AccountMeta, Instruction},
+    pubkey::Pubkey,
+};
 
 use crate::{
     amm::DeriverseAmm, helper::Helper, instrument::OffChainInstrAccountHeader,
-    lines_linked_list::OrderBook,
+    order_book::OrderBook,
 };
 
 pub mod amm;
 pub mod helper;
 pub mod instrument;
 pub mod lines_linked_list;
+pub mod order_book;
+pub mod orders_linked_list;
 
 #[cfg(test)]
 pub mod custom_sdk;
@@ -67,6 +70,8 @@ struct ContextAccounts {
     a_token_state_acc: Pubkey,
     b_token_state_acc: Pubkey,
     lines: Pubkey,
+    bid_orders: Pubkey,
+    ask_orders: Pubkey,
     community_acc: Pubkey,
     a_mint: Pubkey,
     b_mint: Pubkey,
@@ -80,6 +85,8 @@ impl From<ContextAccounts> for Vec<Pubkey> {
             value.b_token_state_acc,
             value.community_acc,
             value.lines,
+            value.bid_orders,
+            value.ask_orders,
             value.a_mint,
             value.b_mint,
         ]
@@ -96,6 +103,16 @@ impl ContextAccounts {
             ),
             a_token_state_acc: instr_header.asset_mint.new_token_acc(),
             b_token_state_acc: instr_header.crncy_mint.new_token_acc(),
+            bid_orders: Pubkey::new_spot_acc(
+                SPOT_BID_ORDERS,
+                instr_header.asset_token_id,
+                instr_header.crncy_token_id,
+            ),
+            ask_orders: Pubkey::new_spot_acc(
+                SPOT_ASK_ORDERS,
+                instr_header.asset_token_id,
+                instr_header.crncy_token_id,
+            ),
             lines: Pubkey::new_spot_acc(
                 SPOT_LINES,
                 instr_header.asset_token_id,
@@ -116,6 +133,18 @@ pub struct SwapReferralParams {
     client_mint_token_acc: Pubkey,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InstructionBuilderParams {
+    ata_init: bool,
+    realloc_allowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParamsWrapper {
+    swap_ref_params: Option<SwapReferralParams>,
+    instruction_builder_params: InstructionBuilderParams,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct Deriverse {
     accounts_ctx: ContextAccounts,
@@ -126,6 +155,7 @@ struct Deriverse {
     amm: DeriverseAmm,
     fee_rate_factor: f64,
     swap_referral_params: Option<SwapReferralParams>,
+    instruction_builder_params: InstructionBuilderParams,
     a_program_id: Pubkey,
     b_program_id: Pubkey,
 }
@@ -160,12 +190,11 @@ impl Amm for Deriverse {
 
         let accounts_ctx = ContextAccounts::build(instr_header.as_ref());
 
-        let swap_referral_params: Option<SwapReferralParams> =
-            if let Some(ref value) = keyed_account.params {
-                from_value(value.clone())?
-            } else {
-                None
-            };
+        let params: ParamsWrapper = if let Some(ref params) = keyed_account.params {
+            from_value(params.clone())?
+        } else {
+            bail!("Need params were not provided in KeydAccount");
+        };
 
         Ok(Deriverse {
             instr_header,
@@ -175,9 +204,10 @@ impl Amm for Deriverse {
             order_book: OrderBook::default(),
             amm: DeriverseAmm::default(),
             fee_rate_factor: 0.0,
-            a_program_id: solana_sdk::system_program::id(),
-            b_program_id: solana_sdk::system_program::id(),
-            swap_referral_params,
+            a_program_id: solana_system_interface::program::id(),
+            b_program_id: solana_system_interface::program::id(),
+            swap_referral_params: params.swap_ref_params,
+            instruction_builder_params: params.instruction_builder_params,
         })
     }
 
@@ -194,6 +224,7 @@ impl Amm for Deriverse {
     }
 
     fn get_accounts_len(&self) -> usize {
+        // TODO calculate accounts amount based on self
         SwapInstruction::MIN_ACCOUNTS
     }
 
@@ -214,6 +245,8 @@ impl Amm for Deriverse {
             community_acc,
             a_mint,
             b_mint,
+            bid_orders,
+            ask_orders,
         } = &self.accounts_ctx;
 
         *self.instr_header = account_map.from_account(instr_header)?;
@@ -229,7 +262,20 @@ impl Amm for Deriverse {
             .get(lines)
             .ok_or(anyhow!("Invalid lines account"))?;
 
-        self.order_book = OrderBook::new(&self.instr_header, lines_acc);
+        let ask_orders_acc = account_map
+            .get(ask_orders)
+            .ok_or(anyhow!("Invalid ask order account"))?;
+
+        let bid_orders_acc = account_map
+            .get(bid_orders)
+            .ok_or(anyhow!("Invalid bid order account"))?;
+
+        self.order_book = OrderBook::new(
+            &self.instr_header,
+            lines_acc,
+            bid_orders_acc,
+            ask_orders_acc,
+        );
         self.amm = DeriverseAmm::new(&self.instr_header);
 
         let a_mint_acc = account_map
@@ -415,17 +461,25 @@ impl Amm for Deriverse {
                                     .ok_or(anyhow!("Arithmetic Overflow"))?;
                             }
                             if remaining_sum > 0 {
-                                let fill_qty =
-                                    (remaining_sum as f64 * amm.df / line.price as f64) as i64;
+                                let init_qty =
+                                    (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
+
+                                let (traded_qty, traded_sum, traded_fees) = self.order_book.fill(
+                                    &line,
+                                    init_qty,
+                                    fee_rate,
+                                    OrderSide::Ask,
+                                )?;
 
                                 qty = qty
-                                    .checked_add(fill_qty)
-                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
-                                total_fees = total_fees
-                                    .checked_add((remaining_sum as f64 * fee_rate) as i64)
+                                    .checked_add(traded_qty)
                                     .ok_or(anyhow!("Arithmetic Overflow"))?;
 
-                                remaining_sum = 0;
+                                total_fees = total_fees
+                                    .checked_add(traded_fees)
+                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
+
+                                remaining_sum -= traded_sum;
                             }
                         }
                         if traded_qty != 0 && traded_mints != 0 {
@@ -439,15 +493,22 @@ impl Amm for Deriverse {
 
                     next_amm_px = amm.get_reversed_amm_px(remaining_sum - line_sum)?;
                     if DeriverseAmm::cover_line(next_amm_px, price, line.price, OrderSide::Ask) {
+                        let init_qty =
+                            (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
+
+                        let (traded_qty, traded_sum, traded_fees) =
+                            self.order_book
+                                .fill(&line, init_qty, fee_rate, OrderSide::Ask)?;
+
                         qty = qty
-                            .checked_add(line.qty)
+                            .checked_add(traded_qty)
                             .ok_or(anyhow!("Arithmetic Overflow"))?;
 
                         total_fees = total_fees
-                            .checked_add((line_sum as f64 * fee_rate) as i64)
+                            .checked_add(traded_fees)
                             .ok_or(anyhow!("Arithmetic Overflow"))?;
 
-                        remaining_sum -= line_sum;
+                        remaining_sum -= traded_sum;
                         continue;
                     }
 
@@ -478,15 +539,22 @@ impl Amm for Deriverse {
                     }
 
                     if DeriverseAmm::cover_line(amm_px, price, line.price, OrderSide::Ask) {
+                        let init_qty =
+                            (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
+
+                        let (traded_qty, traded_sum, traded_fees) =
+                            self.order_book
+                                .fill(&line, init_qty, fee_rate, OrderSide::Ask)?;
+
                         qty = qty
-                            .checked_add(line.qty)
+                            .checked_add(traded_qty)
                             .ok_or(anyhow!("Arithmetic Overflow"))?;
 
                         total_fees = total_fees
-                            .checked_add((line_sum as f64 * fee_rate) as i64)
+                            .checked_add(traded_fees)
                             .ok_or(anyhow!("Arithmetic Overflow"))?;
 
-                        remaining_sum -= line_sum;
+                        remaining_sum -= traded_sum;
                     }
 
                     break;
@@ -625,16 +693,21 @@ impl Amm for Deriverse {
                             }
 
                             if remaining_qty > 0 {
-                                // fill
-                                let fill_sum = amm.trade_sum(remaining_qty, line.price)?;
+                                let (traded_qty, traded_sum, traded_fees) = self.order_book.fill(
+                                    &line,
+                                    remaining_qty,
+                                    fee_rate,
+                                    OrderSide::Bid,
+                                )?;
+
                                 total_fees = total_fees
-                                    .checked_add((fill_sum as f64 * fee_rate) as i64)
+                                    .checked_add(traded_fees)
                                     .ok_or(anyhow!("Arithmetic Overflow"))?;
                                 sum = sum
-                                    .checked_add(fill_sum)
+                                    .checked_add(traded_sum)
                                     .ok_or(anyhow!("Arithmetic Overflow"))?;
 
-                                remaining_qty = 0;
+                                remaining_qty -= traded_qty;
                             }
                         }
 
@@ -649,16 +722,18 @@ impl Amm for Deriverse {
                     next_amm_px = amm.get_amm_px(remaining_qty - line.qty, OrderSide::Bid)?;
 
                     if DeriverseAmm::cover_line(next_amm_px, price, line.price, OrderSide::Bid) {
-                        let fill_sum = amm.trade_sum(line.qty, line.price)?;
+                        let (traded_qty, traded_sum, traded_fees) =
+                            self.order_book
+                                .fill(&line, remaining_qty, fee_rate, OrderSide::Bid)?;
 
                         total_fees = total_fees
-                            .checked_add((fill_sum as f64 * fee_rate) as i64)
+                            .checked_add(traded_fees)
+                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        sum = sum
+                            .checked_add(traded_sum)
                             .ok_or(anyhow!("Arithmetic Overflow"))?;
 
-                        remaining_qty -= line.qty;
-                        sum = sum
-                            .checked_add(fill_sum)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        remaining_qty -= traded_qty;
 
                         continue;
                     }
@@ -688,16 +763,18 @@ impl Amm for Deriverse {
                     }
 
                     if DeriverseAmm::cover_line(next_amm_px, price, line.price, OrderSide::Bid) {
-                        let fill_sum = amm.trade_sum(line.qty, line.price)?;
+                        let (traded_qty, traded_sum, traded_fees) =
+                            self.order_book
+                                .fill(&line, remaining_qty, fee_rate, OrderSide::Bid)?;
 
                         total_fees = total_fees
-                            .checked_add((fill_sum as f64 * fee_rate) as i64)
+                            .checked_add(traded_fees)
+                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        sum = sum
+                            .checked_add(traded_sum)
                             .ok_or(anyhow!("Arithmetic Overflow"))?;
 
-                        remaining_qty -= line.qty;
-                        sum = sum
-                            .checked_add(fill_sum)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        remaining_qty -= traded_qty;
                     }
                 }
 
@@ -744,6 +821,7 @@ impl Amm for Deriverse {
             a_program_id,
             b_program_id,
             swap_referral_params,
+            instruction_builder_params,
             ..
         } = self;
 
@@ -787,46 +865,81 @@ impl Amm for Deriverse {
                 is_writable: false,
             },
             AccountMeta {
+                pubkey: instr_header.asset_mint,
+                is_signer: false,
+                is_writable: false,
+            },
+            AccountMeta {
+                pubkey: instr_header.crncy_mint,
+                is_signer: false,
+                is_writable: false,
+            },
+            AccountMeta {
+                pubkey: Pubkey::get_drv_auth(),
+                is_signer: false,
+                is_writable: false,
+            },
+            AccountMeta {
+                pubkey: a_token_state.program_address,
+                is_signer: false,
+                is_writable: true,
+            },
+            AccountMeta {
+                pubkey: b_token_state.program_address,
+                is_signer: false,
+                is_writable: true,
+            },
+            AccountMeta {
                 pubkey: self.accounts_ctx.instr_header,
                 is_signer: false,
                 is_writable: true,
             },
-            AccountMeta {
-                pubkey: Pubkey::new_spot_acc(
-                    SPOT_BIDS_TREE,
-                    instr_header.asset_token_id,
-                    instr_header.crncy_token_id,
-                ),
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: Pubkey::new_spot_acc(
-                    SPOT_ASKS_TREE,
-                    instr_header.asset_token_id,
-                    instr_header.crncy_token_id,
-                ),
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: Pubkey::new_spot_acc(
-                    SPOT_BID_ORDERS,
-                    instr_header.asset_token_id,
-                    instr_header.crncy_token_id,
-                ),
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: Pubkey::new_spot_acc(
-                    SPOT_ASK_ORDERS,
-                    instr_header.asset_token_id,
-                    instr_header.crncy_token_id,
-                ),
-                is_signer: false,
-                is_writable: true,
-            },
+        ];
+
+        match side {
+            Side::Bid => account_metas.extend_from_slice(&[
+                AccountMeta {
+                    pubkey: Pubkey::new_spot_acc(
+                        SPOT_ASKS_TREE,
+                        instr_header.asset_token_id,
+                        instr_header.crncy_token_id,
+                    ),
+                    is_signer: false,
+                    is_writable: true,
+                },
+                AccountMeta {
+                    pubkey: Pubkey::new_spot_acc(
+                        SPOT_ASK_ORDERS,
+                        instr_header.asset_token_id,
+                        instr_header.crncy_token_id,
+                    ),
+                    is_signer: false,
+                    is_writable: true,
+                },
+            ]),
+            Side::Ask => account_metas.extend_from_slice(&[
+                AccountMeta {
+                    pubkey: Pubkey::new_spot_acc(
+                        SPOT_BIDS_TREE,
+                        instr_header.asset_token_id,
+                        instr_header.crncy_token_id,
+                    ),
+                    is_signer: false,
+                    is_writable: true,
+                },
+                AccountMeta {
+                    pubkey: Pubkey::new_spot_acc(
+                        SPOT_BID_ORDERS,
+                        instr_header.asset_token_id,
+                        instr_header.crncy_token_id,
+                    ),
+                    is_signer: false,
+                    is_writable: true,
+                },
+            ]),
+        }
+
+        account_metas.extend_from_slice(&[
             AccountMeta {
                 pubkey: Pubkey::new_spot_acc(
                     SPOT_LINES,
@@ -892,36 +1005,6 @@ impl Amm for Deriverse {
                 is_writable: false,
             },
             AccountMeta {
-                pubkey: a_token_state.program_address,
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: b_token_state.program_address,
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: instr_header.asset_mint,
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
-                pubkey: instr_header.crncy_mint,
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
-                pubkey: accounts_ctx.a_token_state_acc,
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
-                pubkey: accounts_ctx.b_token_state_acc,
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
                 pubkey: *a_account,
                 is_signer: false,
                 is_writable: true,
@@ -931,32 +1014,7 @@ impl Amm for Deriverse {
                 is_signer: false,
                 is_writable: true,
             },
-            AccountMeta {
-                pubkey: Pubkey::get_drv_auth(),
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
-                pubkey: solana_sdk::system_program::id(),
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
-                pubkey: *a_program_id,
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
-                pubkey: *b_program_id,
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
-                pubkey: spl_associated_token_account::id(),
-                is_signer: false,
-                is_writable: false,
-            },
-        ];
+        ]);
 
         if let Some(params) = swap_referral_params {
             account_metas.extend_from_slice(&[
@@ -971,6 +1029,36 @@ impl Amm for Deriverse {
                     is_writable: true,
                 },
             ]);
+        }
+
+        account_metas.push(AccountMeta {
+            pubkey: *a_program_id,
+            is_signer: false,
+            is_writable: false,
+        });
+
+        if b_program_id != a_program_id {
+            account_metas.push(AccountMeta {
+                pubkey: *b_program_id,
+                is_signer: false,
+                is_writable: false,
+            });
+        }
+
+        if instruction_builder_params.realloc_allowed {
+            account_metas.push(AccountMeta {
+                pubkey: solana_system_interface::program::id(),
+                is_signer: false,
+                is_writable: false,
+            });
+        }
+
+        if instruction_builder_params.ata_init {
+            account_metas.push(AccountMeta {
+                pubkey: spl_associated_token_account::id(),
+                is_signer: false,
+                is_writable: false,
+            });
         }
 
         Ok(SwapAndAccountMetas {
