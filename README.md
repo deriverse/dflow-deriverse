@@ -118,7 +118,9 @@ At Dflow's request, the minimum number of accounts required for a swap instructi
 
 ### Is Active
 
-At Dflow's request, the system program account has been removed from the integration. The design allows the platform to prohibit allocations when needed. **Common error:** non-preallocated candle buffers — allocate them via `extend_candles` if required.
+At Dflow's request, the system program account has been removed from the integration. The design allows the platform to prohibit allocations when needed. 
+
+**Common error:** non-preallocated candle buffers — allocate them via `extend_candles` if required.
 
 ## Testing
 ```bash

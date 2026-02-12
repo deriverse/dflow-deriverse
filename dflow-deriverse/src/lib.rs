@@ -6,7 +6,7 @@ use drv_models::{
     instruction_data::SwapData,
     new_types::instrument::InstrId,
     state::{
-        candles::CandlesAccountHeader,
+        candles::{Candle, CandlesAccountHeader},
         community_account_header::CommunityAccountHeader,
         instrument::InstrAccountHeader,
         token::TokenState,
@@ -24,7 +24,7 @@ use drv_models::{
 use dflow_amm_interface::{AccountMap, Amm, Quote, Side, Swap, SwapAndAccountMetas, SwapParams};
 use serde::{Deserialize, Serialize};
 use serde_json::from_value;
-use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
+use solana_sdk::{account::Account, instruction::AccountMeta, pubkey::Pubkey};
 
 use crate::{
     amm::DeriverseAmm,
@@ -159,7 +159,6 @@ pub struct SwapReferralParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstructionBuilderParams {
     ata_init: bool,
-    realloc_allowed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -169,10 +168,31 @@ pub struct ParamsWrapper {
 }
 
 #[derive(Debug, Clone, PartialEq, Zeroable)]
+pub struct CandleParams {
+    count: u32,
+    buffer_len: u32,
+}
+
+impl CandleParams {
+    pub fn new(account: &Account) -> Self {
+        let header: &CandlesAccountHeader<0> =
+            from_bytes(&account.data[..std::mem::size_of::<CandlesAccountHeader<0>>()]);
+
+        let buffer_len = account.data.len()
+            - std::mem::size_of::<CandlesAccountHeader<0>>() / std::mem::size_of::<Candle>();
+
+        Self {
+            count: header.count,
+            buffer_len: buffer_len as u32,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Zeroable)]
 pub struct Candles {
-    canlde_1m: CandlesAccountHeader<SPOT_1M_CANDLES>,
-    canlde_15m: CandlesAccountHeader<SPOT_15M_CANDLES>,
-    canlde_day: CandlesAccountHeader<SPOT_DAY_CANDLES>,
+    candle_1m: CandleParams,
+    candle_15m: CandleParams,
+    candle_day: CandleParams,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -227,10 +247,6 @@ impl Amm for Deriverse {
             bail!("Need params were not provided in KeydAccount");
         };
 
-        if params.instruction_builder_params.realloc_allowed {
-            accounts_ctx.candles = None;
-        }
-
         Ok(Deriverse {
             instr_header,
             accounts_ctx,
@@ -267,9 +283,7 @@ impl Amm for Deriverse {
         SwapInstruction::MIN_ACCOUNTS
             + (self.a_program_id != self.b_program_id) as usize
             + self.swap_referral_params.is_some() as usize
-            + (self.instruction_builder_params.realloc_allowed
-                || self.instruction_builder_params.ata_init) as usize
-            + self.instruction_builder_params.ata_init as usize
+            + self.instruction_builder_params.ata_init as usize * 2
     }
 
     fn get_reserve_mints(&self) -> Vec<Pubkey> {
@@ -333,27 +347,21 @@ impl Amm for Deriverse {
             .ok_or(anyhow!("Invalid provided address {}", b_mint))?;
         self.b_program_id = b_mint_acc.owner;
 
-        if let Some((canlde_1m, canlde_15m, canlde_day)) = candles {
+        if let Some((candle_1m, candle_15m, candle_day)) = candles {
             let candle_1m_acc = account_map
-                .get(canlde_1m)
-                .ok_or(anyhow!("Invalid provided address {}", canlde_1m))?;
+                .get(candle_1m)
+                .ok_or(anyhow!("Invalid provided address {}", candle_1m))?;
             let candle_15m_acc = account_map
-                .get(canlde_15m)
-                .ok_or(anyhow!("Invalid provided address {}", canlde_15m))?;
+                .get(candle_15m)
+                .ok_or(anyhow!("Invalid provided address {}", candle_15m))?;
             let candle_day_acc = account_map
-                .get(canlde_day)
-                .ok_or(anyhow!("Invalid provided address {}", canlde_day))?;
+                .get(candle_day)
+                .ok_or(anyhow!("Invalid provided address {}", candle_day))?;
 
             self.candles = Some(Candles {
-                canlde_1m: *from_bytes(
-                    &candle_1m_acc.data[..std::mem::size_of::<CandlesAccountHeader<0>>()],
-                ),
-                canlde_15m: *from_bytes(
-                    &candle_15m_acc.data[..std::mem::size_of::<CandlesAccountHeader<0>>()],
-                ),
-                canlde_day: *from_bytes(
-                    &candle_day_acc.data[..std::mem::size_of::<CandlesAccountHeader<0>>()],
-                ),
+                candle_1m: CandleParams::new(&candle_1m_acc),
+                candle_15m: CandleParams::new(&candle_15m_acc),
+                candle_day: CandleParams::new(&candle_day_acc),
             })
         }
 
@@ -1107,15 +1115,12 @@ impl Amm for Deriverse {
             });
         }
 
-        if instruction_builder_params.realloc_allowed || instruction_builder_params.ata_init {
+        if instruction_builder_params.ata_init {
             account_metas.push(AccountMeta {
                 pubkey: solana_system_interface::program::id(),
                 is_signer: false,
                 is_writable: false,
             });
-        }
-
-        if instruction_builder_params.ata_init {
             account_metas.push(AccountMeta {
                 pubkey: spl_associated_token_account::id(),
                 is_signer: false,
@@ -1148,22 +1153,14 @@ impl Amm for Deriverse {
             self.order_book.total_lines_count != 0 || self.instr_header.ps != 0;
 
         let candles_requirements = if let Some(Candles {
-            canlde_1m,
-            canlde_15m,
-            canlde_day,
+            ref candle_1m,
+            ref candle_15m,
+            ref candle_day,
         }) = self.candles
         {
-            let candle_1m_req = (canlde_1m.last + 3 + 1)
-                .min(get_by_tag::<SPOT_1M_CANDLES>(CANDLES).capacity)
-                <= canlde_1m.count;
-            let candle_15m_req = (canlde_15m.last + 1 + 1)
-                .min(get_by_tag::<SPOT_15M_CANDLES>(CANDLES).capacity)
-                <= canlde_1m.count;
-            let candle_day_req = (canlde_day.last + 1 + 1)
-                .min(get_by_tag::<SPOT_DAY_CANDLES>(CANDLES).capacity)
-                <= canlde_1m.count;
-
-            candle_1m_req && candle_15m_req && candle_day_req
+            candle_1m.count + 3 <= candle_1m.buffer_len
+                && candle_15m.count + 1 <= candle_15m.buffer_len
+                && candle_day.count + 1 <= candle_day.buffer_len
         } else {
             true
         };

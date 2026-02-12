@@ -222,11 +222,7 @@ pub mod tests {
         #[test]
         fn get_accounts_to_update() {
             let deriverse = Deriverse::from_keyed_account(
-                &build_key_account(InstructionBuilderParams {
-                    ata_init: false,
-                    realloc_allowed: true,
-                })
-                .unwrap(),
+                &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
                 &AmmContext {
                     clock_ref: ClockRef::default(),
                 },
@@ -245,10 +241,7 @@ pub mod tests {
         fn get_accounts_to_update_with_params() {
             let deriverse = Deriverse::from_keyed_account(
                 &build_key_account_with_params(
-                    InstructionBuilderParams {
-                        ata_init: false,
-                        realloc_allowed: true,
-                    },
+                    InstructionBuilderParams { ata_init: false },
                     SwapReferralParams {
                         fee_rate_factor: 0.0001,
                         client_mint_token_acc: Pubkey::new_unique(),
@@ -283,11 +276,7 @@ pub mod tests {
             let mut accounts_map = AccountMap::with_hasher(ahash::RandomState::new());
 
             let mut deriverse = Deriverse::from_keyed_account(
-                &build_key_account(InstructionBuilderParams {
-                    ata_init: false,
-                    realloc_allowed: true,
-                })
-                .unwrap(),
+                &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
                 &AmmContext {
                     clock_ref: ClockRef::default(),
                 },
@@ -638,11 +627,7 @@ pub mod tests {
             );
 
             let mut new_deriverse = Deriverse::from_keyed_account(
-                &build_key_account(InstructionBuilderParams {
-                    ata_init: false,
-                    realloc_allowed: true,
-                })
-                .unwrap(),
+                &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
                 &AmmContext {
                     clock_ref: ClockRef::default(),
                 },
@@ -1075,10 +1060,7 @@ pub mod tests {
                 };
 
                 let deriverse = init_deriverse(
-                    InstructionBuilderParams {
-                        ata_init: false,
-                        realloc_allowed: true,
-                    },
+                    InstructionBuilderParams { ata_init: false },
                     Some(swap_ref_params.clone()),
                 );
 
@@ -1112,13 +1094,7 @@ pub mod tests {
 
             #[test]
             fn partial_fill_sell() {
-                let deriverse = init_deriverse(
-                    InstructionBuilderParams {
-                        ata_init: false,
-                        realloc_allowed: true,
-                    },
-                    None,
-                );
+                let deriverse = init_deriverse(InstructionBuilderParams { ata_init: false }, None);
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -1144,13 +1120,7 @@ pub mod tests {
 
             #[test]
             fn full_fill_sell() {
-                let deriverse = init_deriverse(
-                    InstructionBuilderParams {
-                        ata_init: false,
-                        realloc_allowed: true,
-                    },
-                    None,
-                );
+                let deriverse = init_deriverse(InstructionBuilderParams { ata_init: false }, None);
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -1176,13 +1146,7 @@ pub mod tests {
 
             #[test]
             fn partial_fill_buy() {
-                let deriverse = init_deriverse(
-                    InstructionBuilderParams {
-                        ata_init: false,
-                        realloc_allowed: true,
-                    },
-                    None,
-                );
+                let deriverse = init_deriverse(InstructionBuilderParams { ata_init: false }, None);
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -1214,11 +1178,7 @@ pub mod tests {
                 let mut accounts_map = AccountMap::with_hasher(ahash::RandomState::new());
 
                 let mut deriverse = Deriverse::from_keyed_account(
-                    &build_key_account(InstructionBuilderParams {
-                        ata_init: false,
-                        realloc_allowed: true,
-                    })
-                    .unwrap(),
+                    &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
                     &AmmContext {
                         clock_ref: ClockRef::default(),
                     },
@@ -1269,11 +1229,7 @@ pub mod tests {
                 );
 
                 let mut new_deriverse = Deriverse::from_keyed_account(
-                    &build_key_account(InstructionBuilderParams {
-                        ata_init: false,
-                        realloc_allowed: true,
-                    })
-                    .unwrap(),
+                    &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
                     &AmmContext {
                         clock_ref: ClockRef::default(),
                     },
@@ -1356,11 +1312,7 @@ pub mod tests {
                 let mut accounts_map = AccountMap::with_hasher(ahash::RandomState::new());
 
                 let mut deriverse = Deriverse::from_keyed_account(
-                    &build_key_account(InstructionBuilderParams {
-                        ata_init: false,
-                        realloc_allowed: true,
-                    })
-                    .unwrap(),
+                    &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
                     &AmmContext {
                         clock_ref: ClockRef::default(),
                     },
@@ -1664,11 +1616,7 @@ pub mod tests {
                 );
 
                 let mut new_deriverse = Deriverse::from_keyed_account(
-                    &build_key_account(InstructionBuilderParams {
-                        ata_init: false,
-                        realloc_allowed: true,
-                    })
-                    .unwrap(),
+                    &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
                     &AmmContext {
                         clock_ref: ClockRef::default(),
                     },
@@ -1842,10 +1790,7 @@ pub mod tests {
 
             let params = to_value(ParamsWrapper {
                 swap_ref_params: swap_ref_params,
-                instruction_builder_params: InstructionBuilderParams {
-                    ata_init,
-                    realloc_allowed,
-                },
+                instruction_builder_params: InstructionBuilderParams { ata_init },
             })
             .unwrap();
 
@@ -2002,6 +1947,11 @@ pub mod tests {
             )
             .unwrap();
 
+            extend_candles(
+                deriverse.instr_header.asset_token_id,
+                deriverse.instr_header.crncy_token_id,
+            );
+
             let accounts_to_update = deriverse.get_accounts_to_update();
 
             let accounts_map = RPC
@@ -2144,7 +2094,7 @@ pub mod tests {
         }
 
         #[test]
-        fn test_deriverse_ata_creation() {
+        fn test_ata_creation() {
             let keyd_account = build_key_account(true, false, None);
 
             let mut deriverse = Deriverse::from_keyed_account(
@@ -2340,7 +2290,7 @@ pub mod tests {
         }
 
         #[test]
-        fn test_deriverse_swap_ref_params() {
+        fn test_swap_ref_params() {
             let ref_taker_ata = get_associated_token_address_with_program_id(
                 &CLIENT_A.pubkey(),
                 &TOKEN_B,
