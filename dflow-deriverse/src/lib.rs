@@ -1,11 +1,12 @@
 use anyhow::{Result, anyhow, bail};
-use bytemuck::{Pod, Zeroable};
+use bytemuck::{Pod, Zeroable, from_bytes};
 use drv_models::{
-    constants::voting::FEE_RATE_STEP,
+    constants::{candles::CANDLES, voting::FEE_RATE_STEP},
     instruction_constants::{DrvInstruction, SwapInstruction},
     instruction_data::SwapData,
     new_types::instrument::InstrId,
     state::{
+        candles::CandlesAccountHeader,
         community_account_header::CommunityAccountHeader,
         instrument::InstrAccountHeader,
         token::TokenState,
@@ -23,13 +24,12 @@ use drv_models::{
 use dflow_amm_interface::{AccountMap, Amm, Quote, Side, Swap, SwapAndAccountMetas, SwapParams};
 use serde::{Deserialize, Serialize};
 use serde_json::from_value;
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-};
+use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
 
 use crate::{
-    amm::DeriverseAmm, helper::Helper, instrument::OffChainInstrAccountHeader,
+    amm::DeriverseAmm,
+    helper::{Helper, get_by_tag},
+    instrument::OffChainInstrAccountHeader,
     order_book::OrderBook,
 };
 
@@ -75,11 +75,12 @@ struct ContextAccounts {
     community_acc: Pubkey,
     a_mint: Pubkey,
     b_mint: Pubkey,
+    pub candles: Option<(Pubkey, Pubkey, Pubkey)>,
 }
 
 impl From<ContextAccounts> for Vec<Pubkey> {
     fn from(value: ContextAccounts) -> Self {
-        vec![
+        let mut vec = vec![
             value.instr_header,
             value.a_token_state_acc,
             value.b_token_state_acc,
@@ -89,7 +90,13 @@ impl From<ContextAccounts> for Vec<Pubkey> {
             value.ask_orders,
             value.a_mint,
             value.b_mint,
-        ]
+        ];
+
+        if let Some(candles) = value.candles {
+            vec.extend_from_slice(&[candles.0, candles.1, candles.2]);
+        }
+
+        vec
     }
 }
 
@@ -121,6 +128,23 @@ impl ContextAccounts {
             community_acc: Pubkey::new_acc(COMMUNITY),
             a_mint: instr_header.asset_mint,
             b_mint: instr_header.crncy_mint,
+            candles: Some((
+                Pubkey::new_spot_acc(
+                    SPOT_1M_CANDLES,
+                    instr_header.asset_token_id,
+                    instr_header.crncy_token_id,
+                ),
+                Pubkey::new_spot_acc(
+                    SPOT_15M_CANDLES,
+                    instr_header.asset_token_id,
+                    instr_header.crncy_token_id,
+                ),
+                Pubkey::new_spot_acc(
+                    SPOT_DAY_CANDLES,
+                    instr_header.asset_token_id,
+                    instr_header.crncy_token_id,
+                ),
+            )),
         }
     }
 }
@@ -129,7 +153,6 @@ impl ContextAccounts {
 /// Referral system on swap. Any client can form a swap transaction with their parameters and receive a part of fees from swap execution
 pub struct SwapReferralParams {
     fee_rate_factor: f64,
-    client: Pubkey,
     client_mint_token_acc: Pubkey,
 }
 
@@ -145,6 +168,13 @@ pub struct ParamsWrapper {
     instruction_builder_params: InstructionBuilderParams,
 }
 
+#[derive(Debug, Clone, PartialEq, Zeroable)]
+pub struct Candles {
+    canlde_1m: CandlesAccountHeader<SPOT_1M_CANDLES>,
+    canlde_15m: CandlesAccountHeader<SPOT_15M_CANDLES>,
+    canlde_day: CandlesAccountHeader<SPOT_DAY_CANDLES>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct Deriverse {
     accounts_ctx: ContextAccounts,
@@ -156,6 +186,7 @@ struct Deriverse {
     fee_rate_factor: f64,
     swap_referral_params: Option<SwapReferralParams>,
     instruction_builder_params: InstructionBuilderParams,
+    candles: Option<Candles>,
     a_program_id: Pubkey,
     b_program_id: Pubkey,
 }
@@ -188,13 +219,17 @@ impl Amm for Deriverse {
             &keyed_account.account.data.as_slice()[..std::mem::size_of::<InstrAccountHeader>()],
         ));
 
-        let accounts_ctx = ContextAccounts::build(instr_header.as_ref());
+        let mut accounts_ctx = ContextAccounts::build(instr_header.as_ref());
 
         let params: ParamsWrapper = if let Some(ref params) = keyed_account.params {
             from_value(params.clone())?
         } else {
             bail!("Need params were not provided in KeydAccount");
         };
+
+        if params.instruction_builder_params.realloc_allowed {
+            accounts_ctx.candles = None;
+        }
 
         Ok(Deriverse {
             instr_header,
@@ -208,6 +243,7 @@ impl Amm for Deriverse {
             b_program_id: solana_system_interface::program::id(),
             swap_referral_params: params.swap_ref_params,
             instruction_builder_params: params.instruction_builder_params,
+            candles: None,
         })
     }
 
@@ -223,9 +259,17 @@ impl Amm for Deriverse {
         self.accounts_ctx.instr_header
     }
 
+    fn has_dynamic_accounts(&self) -> bool {
+        true
+    }
+
     fn get_accounts_len(&self) -> usize {
-        // TODO calculate accounts amount based on self
         SwapInstruction::MIN_ACCOUNTS
+            + (self.a_program_id != self.b_program_id) as usize
+            + self.swap_referral_params.is_some() as usize
+            + (self.instruction_builder_params.realloc_allowed
+                || self.instruction_builder_params.ata_init) as usize
+            + self.instruction_builder_params.ata_init as usize
     }
 
     fn get_reserve_mints(&self) -> Vec<Pubkey> {
@@ -247,6 +291,7 @@ impl Amm for Deriverse {
             b_mint,
             bid_orders,
             ask_orders,
+            candles,
         } = &self.accounts_ctx;
 
         *self.instr_header = account_map.from_account(instr_header)?;
@@ -287,6 +332,31 @@ impl Amm for Deriverse {
             .get(b_mint)
             .ok_or(anyhow!("Invalid provided address {}", b_mint))?;
         self.b_program_id = b_mint_acc.owner;
+
+        if let Some((canlde_1m, canlde_15m, canlde_day)) = candles {
+            println!("Error");
+            let candle_1m_acc = account_map
+                .get(canlde_1m)
+                .ok_or(anyhow!("Invalid provided address {}", canlde_1m))?;
+            let candle_15m_acc = account_map
+                .get(canlde_15m)
+                .ok_or(anyhow!("Invalid provided address {}", canlde_15m))?;
+            let candle_day_acc = account_map
+                .get(canlde_day)
+                .ok_or(anyhow!("Invalid provided address {}", canlde_day))?;
+
+            self.candles = Some(Candles {
+                canlde_1m: *from_bytes(
+                    &candle_1m_acc.data[..std::mem::size_of::<CandlesAccountHeader<0>>()],
+                ),
+                canlde_15m: *from_bytes(
+                    &candle_15m_acc.data[..std::mem::size_of::<CandlesAccountHeader<0>>()],
+                ),
+                canlde_day: *from_bytes(
+                    &candle_day_acc.data[..std::mem::size_of::<CandlesAccountHeader<0>>()],
+                ),
+            })
+        }
 
         Ok(())
     }
@@ -380,7 +450,7 @@ impl Amm for Deriverse {
                 }
 
                 if let Some((_, line)) = line {
-                    let line_sum = amm.trade_sum(line.qty, line.price)?;
+                    let line_sum = order_book.line_sum(&line, OrderSide::Ask, remaining_sum);
 
                     // Proff of assumption - remaining_qty <= line_qty if remaining_sum <= line_sum
                     // remaining_qty =
@@ -1017,18 +1087,11 @@ impl Amm for Deriverse {
         ]);
 
         if let Some(params) = swap_referral_params {
-            account_metas.extend_from_slice(&[
-                AccountMeta {
-                    pubkey: params.client_mint_token_acc,
-                    is_signer: false,
-                    is_writable: true,
-                },
-                AccountMeta {
-                    pubkey: params.client,
-                    is_signer: false,
-                    is_writable: true,
-                },
-            ]);
+            account_metas.extend_from_slice(&[AccountMeta {
+                pubkey: params.client_mint_token_acc,
+                is_signer: false,
+                is_writable: true,
+            }]);
         }
 
         account_metas.push(AccountMeta {
@@ -1045,7 +1108,7 @@ impl Amm for Deriverse {
             });
         }
 
-        if instruction_builder_params.realloc_allowed {
+        if instruction_builder_params.realloc_allowed || instruction_builder_params.ata_init {
             account_metas.push(AccountMeta {
                 pubkey: solana_system_interface::program::id(),
                 is_signer: false,
@@ -1063,6 +1126,10 @@ impl Amm for Deriverse {
 
         Ok(SwapAndAccountMetas {
             swap: Swap::Deriverse {
+                swap_fee_rate: swap_referral_params
+                    .clone()
+                    .map(|params| params.fee_rate_factor)
+                    .unwrap_or(0.0),
                 side,
                 instr_id: *instr_header.instr_id,
             },
@@ -1078,18 +1145,48 @@ impl Amm for Deriverse {
     }
 
     fn is_active(&self) -> bool {
-        self.order_book.total_lines_count != 0 && self.instr_header.ps != 0
+        let market_requirements =
+            self.order_book.total_lines_count != 0 || self.instr_header.ps != 0;
+
+        let candles_requirements = if let Some(Candles {
+            canlde_1m,
+            canlde_15m,
+            canlde_day,
+        }) = self.candles
+        {
+            let candle_1m_req = (canlde_1m.last + 3)
+                .min(get_by_tag::<SPOT_1M_CANDLES>(CANDLES).capacity)
+                <= canlde_1m.count;
+            let candle_15m_req = (canlde_15m.last + 1)
+                .min(get_by_tag::<SPOT_15M_CANDLES>(CANDLES).capacity)
+                <= canlde_1m.count;
+            let candle_day_req = (canlde_day.last + 1)
+                .min(get_by_tag::<SPOT_DAY_CANDLES>(CANDLES).capacity)
+                <= canlde_1m.count;
+
+            candle_1m_req && candle_15m_req && candle_day_req
+        } else {
+            true
+        };
+
+        market_requirements && candles_requirements
     }
 }
 
 fn from_swap(swap: Swap, in_amount: u64) -> SwapData {
-    if let Swap::Deriverse { side, instr_id } = swap {
+    if let Swap::Deriverse {
+        side,
+        instr_id,
+        swap_fee_rate,
+    } = swap
+    {
         SwapData {
             tag: SwapInstruction::INSTRUCTION_NUMBER,
             input_crncy: (side == Side::Bid) as u8,
             instr_id: InstrId(instr_id),
             price: 0,
             amount: in_amount as i64,
+            ref_fee_rate: swap_fee_rate,
             ..SwapData::zeroed()
         }
     } else {

@@ -104,15 +104,21 @@ The **Swap Referral Program** allows aggregators to earn fees from each swap ins
 
 **Parameters:**
 - `fee_rate_factor` — must be less than `0.0002` (automatically aligned by the platform).  
-- `fees_taker_authority` — the authority that receives the referral fees.  
 - `fees_taker_ata` — the associated token account of the fee taker.  
 
 All parameters are passed during **Deriverse initialization** via the `KeydAccount.params` field.  
 
 Currently, the **`dflow-amm-interface`** does not support a valid `params` field. However, such functionality exists in the **`jupiter-amm-interface`**. To implement this behavior, you’ll need to include the **`serde`** and **`serde_json`** dependencies.  
 
-If your design allows it, the `fees_taker_authority` and `fees_taker_ata` parameters can be defined as constants to remove external dependencies.
+If your design allows it, the `fees_taker_authority` parameters can be defined as constants to remove external dependencies.
 
+### Dynamic Account Count
+
+At Dflow's request, the minimum number of accounts required for a swap instruction has been reduced. The size and sequence of account metas can now vary based on input parameters. See `get_swap_and_account_metas` for details.
+
+### Is Active
+
+At Dflow's request, the system program account has been removed from the integration. The design allows the platform to prohibit allocations when needed. **Common error:** non-preallocated candle buffers — allocate them via `extend_candles` if required.
 
 ## Testing
 ```bash

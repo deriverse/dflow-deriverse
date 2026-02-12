@@ -251,7 +251,6 @@ pub mod tests {
                     },
                     SwapReferralParams {
                         fee_rate_factor: 0.0001,
-                        client: Pubkey::new_unique(),
                         client_mint_token_acc: Pubkey::new_unique(),
                     },
                 )
@@ -1072,7 +1071,6 @@ pub mod tests {
             fn partial_fill_sell_with_swap_fees() {
                 let swap_ref_params = SwapReferralParams {
                     fee_rate_factor: 0.01,
-                    client: Pubkey::new_unique(),
                     client_mint_token_acc: Pubkey::new_unique(),
                 };
 
@@ -1392,7 +1390,7 @@ pub mod tests {
                     },
                     // ask (line 2)
                     PxOrders {
-                        price: (9.9 * DF) as i64,
+                        price: (10.5 * DF) as i64,
                         qty: 100_000,
                         next: 4,
                         prev: NULL_ORDER,
@@ -1412,7 +1410,7 @@ pub mod tests {
                     },
                     // ask (line 4)
                     PxOrders {
-                        price: (10.1 * DF) as i64,
+                        price: (10.6 * DF) as i64,
                         qty: 100_000,
                         next: 6,
                         prev: NULL_ORDER,
@@ -1424,16 +1422,6 @@ pub mod tests {
                     PxOrders {
                         next: NULL_ORDER,
                         prev: NULL_ORDER,
-                        ..Zeroable::zeroed()
-                    },
-                    // ask (line 6)
-                    PxOrders {
-                        price: (10.1 * DF) as i64,
-                        qty: 100_000,
-                        next: NULL_ORDER,
-                        prev: 4,
-                        sref: 0,
-                        begin: 7,
                         ..Zeroable::zeroed()
                     },
                 ];
@@ -1560,6 +1548,7 @@ pub mod tests {
                 ];
 
                 let ask_orders: Orders = vec![
+                    // --- Line 2 orders (begin=0, qty: 40k+30k+30k = 100k) ---
                     Order {
                         qty: 40_000,
                         sum: sum_for(40_000, 2),
@@ -1590,9 +1579,10 @@ pub mod tests {
                         sref: 2,
                         ..Zeroable::zeroed()
                     },
+                    // --- Line 4 orders (begin=3, qty: 25k+25k+25k+25k = 100k) ---
                     Order {
-                        qty: 25_000,
-                        sum: sum_for(25_000, 4),
+                        qty: 50_000,
+                        sum: sum_for(50_000, 4),
                         order_id: 3,
                         line: 4,
                         prev: NULL_ORDER,
@@ -1601,65 +1591,16 @@ pub mod tests {
                         ..Zeroable::zeroed()
                     },
                     Order {
-                        qty: 25_000,
-                        sum: sum_for(25_000, 4),
+                        qty: 50_000,
+                        sum: sum_for(50_000, 4),
                         order_id: 4,
                         line: 4,
                         prev: 3,
-                        next: 5,
+                        next: NULL_ORDER,
                         sref: 4,
                         ..Zeroable::zeroed()
                     },
-                    Order {
-                        qty: 25_000,
-                        sum: sum_for(25_000, 4),
-                        order_id: 5,
-                        line: 4,
-                        prev: 4,
-                        next: 6,
-                        sref: 5,
-                        ..Zeroable::zeroed()
-                    },
-                    Order {
-                        qty: 25_000,
-                        sum: sum_for(25_000, 4),
-                        order_id: 6,
-                        line: 4,
-                        prev: 5,
-                        next: NULL_ORDER,
-                        sref: 6,
-                        ..Zeroable::zeroed()
-                    },
-                    Order {
-                        qty: 35_000,
-                        sum: sum_for(35_000, 6),
-                        order_id: 7,
-                        line: 6,
-                        prev: NULL_ORDER,
-                        next: 8,
-                        sref: 7,
-                        ..Zeroable::zeroed()
-                    },
-                    Order {
-                        qty: 35_000,
-                        sum: sum_for(35_000, 6),
-                        order_id: 8,
-                        line: 6,
-                        prev: 7,
-                        next: 9,
-                        sref: 8,
-                        ..Zeroable::zeroed()
-                    },
-                    Order {
-                        qty: 30_000,
-                        sum: sum_for(30_000, 6),
-                        order_id: 9,
-                        line: 6,
-                        prev: 8,
-                        next: NULL_ORDER,
-                        sref: 9,
-                        ..Zeroable::zeroed()
-                    },
+                    // --- Empty orders ---
                     Order {
                         order_id: 10,
                         next: NULL_ORDER,
@@ -1688,7 +1629,7 @@ pub mod tests {
                         ask_orders,
                         bid_orders,
                         0,
-                        0,
+                        2,
                     )
                     .unwrap();
 
@@ -1779,7 +1720,9 @@ pub mod tests {
 
                 deriverse.amm.a_tokens = 1_000_000 * get_dec_factor(TOKEN_A.decs_count as u8);
                 deriverse.amm.b_tokens = 10_500_000 * get_dec_factor(TOKEN_B.decs_count as u8);
+                deriverse.amm.k = deriverse.amm.a_tokens as i128 * deriverse.amm.b_tokens as i128;
 
+                //990_000_000
                 let result = deriverse
                     .quote(&QuoteParams {
                         amount: 1_400_000_000,
@@ -1792,8 +1735,7 @@ pub mod tests {
                 println!("In Amount: {}", result.in_amount);
                 println!("Out Amount: {}", result.out_amount);
 
-                let expected = (1_400_000_000 as f64
-                    / 10.07
+                let expected = ((1_400_000_000 as f64 / 10.5)
                     / (get_dec_factor((TOKEN_B.decs_count - TOKEN_A.decs_count) as u8) as f64))
                     as u64;
                 println!("Expected: {}", expected);
@@ -1817,8 +1759,9 @@ pub mod tests {
             Amm, AmmContext, ClockRef, KeyedAccount, SwapAndAccountMetas, SwapParams,
         };
         use drv_models::state::{
-            client_primary_account_header::ClientPrimaryAccountHeader, token::TokenState,
-            types::account_type::INSTR,
+            client_primary_account_header::ClientPrimaryAccountHeader,
+            token::TokenState,
+            types::account_type::{INSTR, SPOT_1M_CANDLES, SPOT_15M_CANDLES, SPOT_DAY_CANDLES},
         };
         use once_cell::sync::Lazy;
         use serde_json::to_value;
@@ -1833,9 +1776,10 @@ pub mod tests {
         use spl_associated_token_account::get_associated_token_address_with_program_id;
 
         use crate::{
-            Deriverse, InstructionBuilderParams, ParamsWrapper,
+            Deriverse, InstructionBuilderParams, ParamsWrapper, SwapReferralParams,
             custom_sdk::{
                 deposit::{DepositBuildContext, DepositContext},
+                extend_candles::ExtendCandlesBuilder,
                 new_spot_order::{NewSpotOrderBuildContext, NewSpotOrderContext},
                 traits::{Context, InstructionBuilder},
             },
@@ -1855,6 +1799,8 @@ pub mod tests {
             Lazy::new(|| Keypair::read_from_file("../keys/client-a.json").unwrap());
         static CLIENT_B: Lazy<Keypair> =
             Lazy::new(|| Keypair::read_from_file("../keys/client-b.json").unwrap());
+        static CLIENT_C: Lazy<Keypair> =
+            Lazy::new(|| Keypair::read_from_file("../keys/client-c.json").unwrap());
 
         pub mod config {
             use solana_sdk::pubkey::Pubkey;
@@ -1874,7 +1820,11 @@ pub mod tests {
             }
         }
 
-        fn build_key_account() -> KeyedAccount {
+        fn build_key_account(
+            ata_init: bool,
+            realloc_allowed: bool,
+            swap_ref_params: Option<SwapReferralParams>,
+        ) -> KeyedAccount {
             let a_token_state = {
                 let addr = TOKEN_A.new_token_acc();
                 let acc = RPC.get_account(&addr).unwrap();
@@ -1891,10 +1841,10 @@ pub mod tests {
             let keyd_acc = RPC.get_account(&keyd_addr).unwrap();
 
             let params = to_value(ParamsWrapper {
-                swap_ref_params: None,
+                swap_ref_params: swap_ref_params,
                 instruction_builder_params: InstructionBuilderParams {
-                    ata_init: false,
-                    realloc_allowed: true,
+                    ata_init,
+                    realloc_allowed,
                 },
             })
             .unwrap();
@@ -1952,7 +1902,7 @@ pub mod tests {
                     token_a_mint: TOKEN_A,
                     token_b_mint: TOKEN_B,
                     price: 10.1,
-                    amount: 1.0,
+                    amount: 12.0,
                 })
                 .unwrap();
 
@@ -1972,7 +1922,7 @@ pub mod tests {
 
         #[test]
         fn test_build_key_account() {
-            let keyd_account = build_key_account();
+            let keyd_account = build_key_account(false, true, None);
 
             let mut deriverse = Deriverse::from_keyed_account(
                 &keyd_account,
@@ -2002,9 +1952,47 @@ pub mod tests {
             println!("Bid Orders: {:?}", deriverse.order_book.bid_orders);
         }
 
+        fn extend_candles(asset_token_id: u32, crncy_token_id: u32) {
+            let extend_candles_ix_1m = ExtendCandlesBuilder::extend_candles(
+                CLIENT_A.pubkey(),
+                SPOT_1M_CANDLES,
+                asset_token_id,
+                crncy_token_id,
+            );
+
+            let extend_candles_ix_15m = ExtendCandlesBuilder::extend_candles(
+                CLIENT_A.pubkey(),
+                SPOT_15M_CANDLES,
+                asset_token_id,
+                crncy_token_id,
+            );
+            let extend_candles_ix_day = ExtendCandlesBuilder::extend_candles(
+                CLIENT_A.pubkey(),
+                SPOT_DAY_CANDLES,
+                asset_token_id,
+                crncy_token_id,
+            );
+
+            let mut tx = Transaction::new_with_payer(
+                &[
+                    extend_candles_ix_1m,
+                    extend_candles_ix_15m,
+                    extend_candles_ix_day,
+                ],
+                Some(&CLIENT_A.pubkey()),
+            );
+
+            tx.sign(
+                &[CLIENT_A.insecure_clone()],
+                RPC.get_latest_blockhash().unwrap(),
+            );
+
+            RPC.send_and_confirm_transaction(&tx).unwrap();
+        }
+
         #[test]
         fn test_deriverse() {
-            let keyd_account = build_key_account();
+            let keyd_account = build_key_account(false, false, None);
 
             let mut deriverse = Deriverse::from_keyed_account(
                 &keyd_account,
@@ -2013,8 +2001,6 @@ pub mod tests {
                 },
             )
             .unwrap();
-
-            // init_deriverse();
 
             let accounts_to_update = deriverse.get_accounts_to_update();
 
@@ -2061,19 +2047,27 @@ pub mod tests {
             );
 
             let a_balance_before = {
-                let account = RPC.get_account(&a_ata).unwrap();
+                let account = RPC.get_account(&a_ata);
 
-                u64::from_le_bytes(account.data[64..72].try_into().unwrap())
+                account
+                    .map(|acc| u64::from_le_bytes(acc.data[64..72].try_into().unwrap()))
+                    .unwrap_or(0)
             };
 
             let b_balance_before = {
-                let account = RPC.get_account(&b_ata).unwrap();
+                let account = RPC.get_account(&b_ata);
 
-                u64::from_le_bytes(account.data[64..72].try_into().unwrap())
+                account
+                    .map(|acc| u64::from_le_bytes(acc.data[64..72].try_into().unwrap()))
+                    .unwrap_or(0)
             };
 
             println!("A before: {}", a_balance_before);
             println!("B before: {}", b_balance_before);
+
+            if !deriverse.is_active() {
+                panic!("Deriverse is not active for trading")
+            }
 
             let SwapAndAccountMetas {
                 swap,
@@ -2147,6 +2141,392 @@ pub mod tests {
                 "B exchanged: {}",
                 b_balance_after as i64 - b_balance_before as i64
             );
+        }
+
+        #[test]
+        fn test_deriverse_ata_creation() {
+            let keyd_account = build_key_account(true, false, None);
+
+            let mut deriverse = Deriverse::from_keyed_account(
+                &keyd_account,
+                &AmmContext {
+                    clock_ref: ClockRef::default(),
+                },
+            )
+            .unwrap();
+
+            let accounts_to_update = deriverse.get_accounts_to_update();
+
+            let accounts_map = RPC
+                .get_multiple_accounts(&accounts_to_update)
+                .unwrap()
+                .iter()
+                .enumerate()
+                .fold(HashMap::new(), |mut m, (index, account)| {
+                    if let Some(account) = account {
+                        m.insert(accounts_to_update[index], account.clone());
+                    }
+                    m
+                });
+
+            deriverse.update(&accounts_map).unwrap();
+
+            let in_amount = get_dec_factor((deriverse.b_token_state.mask & 0xFF) as u8) as u64 - 2;
+
+            let quote_result = deriverse
+                .quote(&dflow_amm_interface::QuoteParams {
+                    amount: in_amount,
+                    input_mint: TOKEN_A,
+                    output_mint: TOKEN_B,
+                    swap_mode: dflow_amm_interface::SwapMode::ExactIn,
+                })
+                .unwrap();
+
+            println!("Result: {:?}", quote_result);
+
+            println!("Program id: {}", deriverse.a_program_id);
+            println!("Program id: {}", deriverse.b_program_id);
+
+            let a_ata = get_associated_token_address_with_program_id(
+                &CLIENT_C.pubkey(),
+                &TOKEN_A,
+                &deriverse.a_program_id,
+            );
+
+            let b_ata = get_associated_token_address_with_program_id(
+                &CLIENT_C.pubkey(),
+                &TOKEN_B,
+                &deriverse.a_program_id,
+            );
+
+            let a_balance_before = {
+                let account = RPC.get_account(&a_ata);
+
+                account
+                    .map(|acc| u64::from_le_bytes(acc.data[64..72].try_into().unwrap()))
+                    .unwrap_or(0)
+            };
+
+            let b_balance_before = {
+                let account = RPC.get_account(&b_ata);
+
+                account
+                    .map(|acc| u64::from_le_bytes(acc.data[64..72].try_into().unwrap()))
+                    .unwrap_or(0)
+            };
+
+            println!("A before: {}", a_balance_before);
+            println!("B before: {}", b_balance_before);
+
+            if !deriverse.is_active() {
+                panic!("Deriverse is not active for trading")
+            }
+
+            let SwapAndAccountMetas {
+                swap,
+                account_metas,
+            } = deriverse
+                .get_swap_and_account_metas(&SwapParams {
+                    in_amount,
+                    source_mint: TOKEN_A,
+                    destination_mint: TOKEN_B,
+                    source_token_account: a_ata,
+                    destination_token_account: b_ata,
+                    token_transfer_authority: CLIENT_C.pubkey(),
+                })
+                .unwrap();
+
+            let instruction_data = from_swap(swap, in_amount);
+
+            let ix = Instruction::new_with_bytes(
+                program_id::id(),
+                bytes_of(&instruction_data),
+                account_metas,
+            );
+
+            let mut tx = Transaction::new_with_payer(&[ix], Some(&CLIENT_C.pubkey()));
+            tx.sign(
+                &[CLIENT_C.insecure_clone()],
+                RPC.get_latest_blockhash().unwrap(),
+            );
+
+            println!(
+                "Signature: {}",
+                RPC.send_and_confirm_transaction(&tx).unwrap()
+            );
+
+            let a_balance_after = {
+                let account = RPC.get_account(&a_ata).unwrap();
+
+                println!("Owner: {}", account.owner);
+
+                u64::from_le_bytes(account.data[64..72].try_into().unwrap())
+            };
+
+            let b_balance_after = {
+                let account = RPC.get_account(&b_ata).unwrap();
+
+                u64::from_le_bytes(account.data[64..72].try_into().unwrap())
+            };
+
+            assert!(a_balance_after < a_balance_before, "Incorrect order side");
+            assert!(b_balance_after > b_balance_before, "Incorrect order side");
+
+            assert!(
+                (quote_result.in_amount as i64
+                    - (a_balance_after as i64 - a_balance_before as i64).abs())
+                    < (quote_result.in_amount as f64 * 0.012) as i64,
+                "Calculations of quote where not precise enough"
+            );
+
+            assert!(
+                (quote_result.out_amount as i64
+                    - (b_balance_after as i64 - b_balance_before as i64).abs())
+                    < (quote_result.out_amount as f64 * 0.012) as i64,
+                "Calculations of quote where not precise enough"
+            );
+
+            println!("A before: {}", a_balance_after);
+            println!("B before: {}", b_balance_after);
+            println!(
+                "A exchanged: {}",
+                a_balance_after as i64 - a_balance_before as i64
+            );
+            println!(
+                "B exchanged: {}",
+                b_balance_after as i64 - b_balance_before as i64
+            );
+            // close ata
+
+            let b_ata_client_b = get_associated_token_address_with_program_id(
+                &CLIENT_B.pubkey(),
+                &TOKEN_B,
+                &deriverse.a_program_id,
+            );
+
+            let close_acc = spl_token_interface::instruction::close_account(
+                &spl_token_interface::id(),
+                &b_ata,
+                &b_ata_client_b,
+                &CLIENT_C.pubkey(),
+                &[&CLIENT_C.pubkey()],
+            )
+            .unwrap();
+
+            let transfer_tokens = spl_token_interface::instruction::transfer_checked(
+                &spl_token_interface::id(),
+                &b_ata,
+                &TOKEN_B,
+                &b_ata_client_b,
+                &CLIENT_C.pubkey(),
+                &[&CLIENT_C.pubkey()],
+                b_balance_after,
+                (deriverse.b_token_state.mask & 0xFF) as u8,
+            )
+            .unwrap();
+
+            let mut tx = Transaction::new_with_payer(
+                &[transfer_tokens, close_acc],
+                Some(&CLIENT_C.pubkey()),
+            );
+
+            tx.sign(
+                &[CLIENT_C.insecure_clone()],
+                RPC.get_latest_blockhash().unwrap(),
+            );
+
+            let result = RPC.send_and_confirm_transaction(&tx).unwrap();
+            println!("Result {}", result);
+        }
+
+        #[test]
+        fn test_deriverse_swap_ref_params() {
+            let ref_taker_ata = get_associated_token_address_with_program_id(
+                &CLIENT_A.pubkey(),
+                &TOKEN_B,
+                &spl_token_interface::id(),
+            );
+
+            let keyd_account = build_key_account(
+                false,
+                false,
+                Some(SwapReferralParams {
+                    fee_rate_factor: 1.0,
+                    client_mint_token_acc: ref_taker_ata,
+                }),
+            );
+
+            let mut deriverse = Deriverse::from_keyed_account(
+                &keyd_account,
+                &AmmContext {
+                    clock_ref: ClockRef::default(),
+                },
+            )
+            .unwrap();
+
+            let accounts_to_update = deriverse.get_accounts_to_update();
+
+            let accounts_map = RPC
+                .get_multiple_accounts(&accounts_to_update)
+                .unwrap()
+                .iter()
+                .enumerate()
+                .fold(HashMap::new(), |mut m, (index, account)| {
+                    if let Some(account) = account {
+                        m.insert(accounts_to_update[index], account.clone());
+                    }
+                    m
+                });
+
+            deriverse.update(&accounts_map).unwrap();
+
+            let in_amount = get_dec_factor((deriverse.b_token_state.mask & 0xFF) as u8) as u64 - 2;
+
+            let quote_result = deriverse
+                .quote(&dflow_amm_interface::QuoteParams {
+                    amount: in_amount,
+                    input_mint: TOKEN_A,
+                    output_mint: TOKEN_B,
+                    swap_mode: dflow_amm_interface::SwapMode::ExactIn,
+                })
+                .unwrap();
+
+            println!("Result: {:?}", quote_result);
+
+            println!("Program id: {}", deriverse.a_program_id);
+            println!("Program id: {}", deriverse.b_program_id);
+
+            let a_ata = get_associated_token_address_with_program_id(
+                &CLIENT_B.pubkey(),
+                &TOKEN_A,
+                &deriverse.a_program_id,
+            );
+
+            let b_ata = get_associated_token_address_with_program_id(
+                &CLIENT_B.pubkey(),
+                &TOKEN_B,
+                &deriverse.a_program_id,
+            );
+
+            let a_balance_before = {
+                let account = RPC.get_account(&a_ata);
+
+                account
+                    .map(|acc| u64::from_le_bytes(acc.data[64..72].try_into().unwrap()))
+                    .unwrap_or(0)
+            };
+
+            let b_balance_before = {
+                let account = RPC.get_account(&b_ata);
+
+                account
+                    .map(|acc| u64::from_le_bytes(acc.data[64..72].try_into().unwrap()))
+                    .unwrap_or(0)
+            };
+
+            let ref_taker_balance_before = {
+                let account = RPC.get_account(&ref_taker_ata);
+
+                account
+                    .map(|acc| u64::from_le_bytes(acc.data[64..72].try_into().unwrap()))
+                    .unwrap_or(0)
+            };
+
+            println!("A before: {}", a_balance_before);
+            println!("B before: {}", b_balance_before);
+
+            if !deriverse.is_active() {
+                panic!("Deriverse is not active for trading")
+            }
+
+            let SwapAndAccountMetas {
+                swap,
+                account_metas,
+            } = deriverse
+                .get_swap_and_account_metas(&SwapParams {
+                    in_amount,
+                    source_mint: TOKEN_A,
+                    destination_mint: TOKEN_B,
+                    source_token_account: a_ata,
+                    destination_token_account: b_ata,
+                    token_transfer_authority: CLIENT_B.pubkey(),
+                })
+                .unwrap();
+
+            let instruction_data = from_swap(swap, in_amount);
+
+            let ix = Instruction::new_with_bytes(
+                program_id::id(),
+                bytes_of(&instruction_data),
+                account_metas,
+            );
+
+            let mut tx = Transaction::new_with_payer(&[ix], Some(&CLIENT_B.pubkey()));
+            tx.sign(
+                &[CLIENT_B.insecure_clone()],
+                RPC.get_latest_blockhash().unwrap(),
+            );
+
+            println!(
+                "Signature: {}",
+                RPC.send_and_confirm_transaction(&tx).unwrap()
+            );
+
+            let a_balance_after = {
+                let account = RPC.get_account(&a_ata).unwrap();
+
+                u64::from_le_bytes(account.data[64..72].try_into().unwrap())
+            };
+
+            let b_balance_after = {
+                let account = RPC.get_account(&b_ata).unwrap();
+
+                u64::from_le_bytes(account.data[64..72].try_into().unwrap())
+            };
+
+            let ref_taker_balance_after = {
+                let account = RPC.get_account(&ref_taker_ata).unwrap();
+
+                u64::from_le_bytes(account.data[64..72].try_into().unwrap())
+            };
+
+            assert!(a_balance_after < a_balance_before, "Incorrect order side");
+            assert!(b_balance_after > b_balance_before, "Incorrect order side");
+
+            assert!(
+                (quote_result.in_amount as i64
+                    - (a_balance_after as i64 - a_balance_before as i64).abs())
+                    < (quote_result.in_amount as f64 * 0.012) as i64,
+                "Calculations of quote where not precise enough"
+            );
+
+            assert!(
+                (quote_result.out_amount as i64
+                    - (b_balance_after as i64 - b_balance_before as i64).abs())
+                    < (quote_result.out_amount as f64 * 0.012) as i64,
+                "Calculations of quote where not precise enough"
+            );
+
+            println!("A before: {}", a_balance_after);
+            println!("B before: {}", b_balance_after);
+            println!(
+                "A exchanged: {}",
+                a_balance_after as i64 - a_balance_before as i64
+            );
+            println!(
+                "B exchanged: {}",
+                b_balance_after as i64 - b_balance_before as i64
+            );
+
+            assert!(
+                ref_taker_balance_after > ref_taker_balance_before,
+                "Ref taker didnt receive any payments"
+            );
+
+            println!(
+                "Ref payment {}",
+                ref_taker_balance_after - ref_taker_balance_before
+            )
         }
     }
 }

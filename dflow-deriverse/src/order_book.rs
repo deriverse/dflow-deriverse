@@ -2,7 +2,6 @@ use anyhow::bail;
 use bytemuck::cast_slice;
 use drv_models::{
     constants::{nulls::NULL_ORDER, trading_limitations::MAX_SUM},
-    log::PerpOrderRevokeReport,
     state::{
         instrument::InstrAccountHeader,
         spots::spot_account_header::SPOT_TRADE_ACCOUNT_HEADER_SIZE,
@@ -117,6 +116,25 @@ impl OrderBook {
         }
 
         Ok(sum as i64)
+    }
+
+    pub fn line_sum(&self, line: &PxOrders, side: OrderSide, remaining_sum: i64) -> i64 {
+        let orders = match side {
+            OrderSide::Bid => &self.bid_orders,
+            OrderSide::Ask => &self.ask_orders,
+        };
+
+        let mut orders = orders.iter_from(line.begin);
+        let mut sum = 0;
+
+        while let Some((_, order)) = orders.next() {
+            sum += order.sum;
+            if sum > remaining_sum {
+                break;
+            }
+        }
+
+        sum
     }
 
     pub fn fill(
