@@ -334,7 +334,6 @@ impl Amm for Deriverse {
         self.b_program_id = b_mint_acc.owner;
 
         if let Some((canlde_1m, canlde_15m, canlde_day)) = candles {
-            println!("Error");
             let candle_1m_acc = account_map
                 .get(canlde_1m)
                 .ok_or(anyhow!("Invalid provided address {}", canlde_1m))?;
@@ -1154,13 +1153,13 @@ impl Amm for Deriverse {
             canlde_day,
         }) = self.candles
         {
-            let candle_1m_req = (canlde_1m.last + 3)
+            let candle_1m_req = (canlde_1m.last + 3 + 1)
                 .min(get_by_tag::<SPOT_1M_CANDLES>(CANDLES).capacity)
                 <= canlde_1m.count;
-            let candle_15m_req = (canlde_15m.last + 1)
+            let candle_15m_req = (canlde_15m.last + 1 + 1)
                 .min(get_by_tag::<SPOT_15M_CANDLES>(CANDLES).capacity)
                 <= canlde_1m.count;
-            let candle_day_req = (canlde_day.last + 1)
+            let candle_day_req = (canlde_day.last + 1 + 1)
                 .min(get_by_tag::<SPOT_DAY_CANDLES>(CANDLES).capacity)
                 <= canlde_1m.count;
 

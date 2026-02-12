@@ -1060,9 +1060,9 @@ pub mod tests {
                 )
                 .unwrap();
 
-                new_deriverse.update(&accounts_map).unwrap();
-
                 new_deriverse.swap_referral_params = deriverse.swap_referral_params;
+
+                new_deriverse.update(&accounts_map).unwrap();
 
                 new_deriverse
             }
@@ -1115,7 +1115,7 @@ pub mod tests {
                 let deriverse = init_deriverse(
                     InstructionBuilderParams {
                         ata_init: false,
-                        realloc_allowed: false,
+                        realloc_allowed: true,
                     },
                     None,
                 );
@@ -1147,7 +1147,7 @@ pub mod tests {
                 let deriverse = init_deriverse(
                     InstructionBuilderParams {
                         ata_init: false,
-                        realloc_allowed: false,
+                        realloc_allowed: true,
                     },
                     None,
                 );
@@ -1179,7 +1179,7 @@ pub mod tests {
                 let deriverse = init_deriverse(
                     InstructionBuilderParams {
                         ata_init: false,
-                        realloc_allowed: false,
+                        realloc_allowed: true,
                     },
                     None,
                 );
