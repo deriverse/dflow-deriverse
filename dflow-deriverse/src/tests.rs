@@ -1947,11 +1947,6 @@ pub mod tests {
             )
             .unwrap();
 
-            extend_candles(
-                deriverse.instr_header.asset_token_id,
-                deriverse.instr_header.crncy_token_id,
-            );
-
             let accounts_to_update = deriverse.get_accounts_to_update();
 
             let accounts_map = RPC
