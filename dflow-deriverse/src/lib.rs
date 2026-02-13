@@ -1161,11 +1161,11 @@ impl Amm for Deriverse {
         }) = self.candles
         {
             (candle_1m.count + 3 < candle_1m.buffer_len
-                || candle_1m.buffer_len == candle_1m.capacity)
+                || candle_1m.buffer_len >= candle_1m.capacity)
                 && (candle_15m.count + 1 < candle_15m.buffer_len
-                    || candle_15m.buffer_len == candle_15m.capacity)
+                    || candle_15m.buffer_len >= candle_15m.capacity)
                 && (candle_day.count + 1 < candle_day.buffer_len
-                    || candle_day.buffer_len == candle_day.capacity)
+                    || candle_day.buffer_len >= candle_day.capacity)
         } else {
             true
         };
