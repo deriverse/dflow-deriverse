@@ -171,10 +171,11 @@ pub struct ParamsWrapper {
 pub struct CandleParams {
     count: u32,
     buffer_len: u32,
+    capacity: u32,
 }
 
 impl CandleParams {
-    pub fn new(account: &Account) -> Self {
+    pub fn new<const TAG: u32>(account: &Account) -> Self {
         let header: &CandlesAccountHeader<0> =
             from_bytes(&account.data[..std::mem::size_of::<CandlesAccountHeader<0>>()]);
 
@@ -184,6 +185,7 @@ impl CandleParams {
         Self {
             count: header.count,
             buffer_len: buffer_len as u32,
+            capacity: get_by_tag::<TAG>(CANDLES).capacity,
         }
     }
 }
@@ -359,9 +361,9 @@ impl Amm for Deriverse {
                 .ok_or(anyhow!("Invalid provided address {}", candle_day))?;
 
             self.candles = Some(Candles {
-                candle_1m: CandleParams::new(&candle_1m_acc),
-                candle_15m: CandleParams::new(&candle_15m_acc),
-                candle_day: CandleParams::new(&candle_day_acc),
+                candle_1m: CandleParams::new::<SPOT_1M_CANDLES>(&candle_1m_acc),
+                candle_15m: CandleParams::new::<SPOT_15M_CANDLES>(&candle_15m_acc),
+                candle_day: CandleParams::new::<SPOT_DAY_CANDLES>(&candle_day_acc),
             })
         }
 
@@ -1158,9 +1160,12 @@ impl Amm for Deriverse {
             ref candle_day,
         }) = self.candles
         {
-            candle_1m.count + 3 < candle_1m.buffer_len
-                && candle_15m.count + 1 < candle_15m.buffer_len
-                && candle_day.count + 1 < candle_day.buffer_len
+            (candle_1m.count + 3 < candle_1m.buffer_len
+                || candle_1m.buffer_len == candle_1m.capacity)
+                && (candle_15m.count + 1 < candle_15m.buffer_len
+                    || candle_15m.buffer_len == candle_15m.capacity)
+                && (candle_day.count + 1 < candle_day.buffer_len
+                    || candle_day.buffer_len == candle_day.capacity)
         } else {
             true
         };
