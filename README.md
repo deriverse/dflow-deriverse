@@ -1,6 +1,6 @@
-# Dflow-Deriverse Integration
+# Titan-Deriverse Integration
 
-A Dflow aggregator integration for the Deriverse protocol.
+A Titan aggregator integration for the Deriverse protocol.
 
 ## Internal State Construction
 
@@ -43,7 +43,7 @@ pub enum Swap {
     },
 }
 ```
-`dflow-amm-interface` copy contains extended `Swap` enum
+`titan-amm-interface` copy contains extended `Swap` enum
 
 The instruction data can be built using `lib::from_swap`.
 
@@ -89,11 +89,11 @@ fn build_key_account() -> KeyedAccount {
  let in_amount = get_dec_factor((deriverse.b_token_state.mask & 0xFF) as u8) as u64;
 
  let quote_result = deriverse
-     .quote(&dflow_amm_interface::QuoteParams {
+     .quote(&jupiter_amm_interface::QuoteParams {
          amount: in_amount,
          input_mint: TOKEN_A,
          output_mint: TOKEN_B,
-         swap_mode: dflow_amm_interface::SwapMode::ExactIn,
+         swap_mode: jupiter_amm_interface::SwapMode::ExactIn,
      })
      .unwrap();
 ```
@@ -108,17 +108,17 @@ The **Swap Referral Program** allows aggregators to earn fees from each swap ins
 
 All parameters are passed during **Deriverse initialization** via the `KeydAccount.params` field.  
 
-Currently, the **`dflow-amm-interface`** does not support a valid `params` field. However, such functionality exists in the **`jupiter-amm-interface`**. To implement this behavior, you’ll need to include the **`serde`** and **`serde_json`** dependencies.  
+Currently, the **`jupiter-amm-interface`** does not support a valid `params` field. However, such functionality exists in the **`jupiter-amm-interface`**. To implement this behavior, you’ll need to include the **`serde`** and **`serde_json`** dependencies.  
 
 If your design allows it, the `fees_taker_authority` parameters can be defined as constants to remove external dependencies.
 
 ### Dynamic Account Count
 
-At Dflow's request, the minimum number of accounts required for a swap instruction has been reduced. The size and sequence of account metas can now vary based on input parameters. See `get_swap_and_account_metas` for details.
+The minimum number of accounts required for a swap instruction has been reduced. The size and sequence of account metas can now vary based on input parameters. See `get_swap_and_account_metas` for details.
 
 ### Is Active
 
-At Dflow's request, the system program account has been removed from the integration. The design allows the platform to prohibit allocations when needed. 
+The system program account has been removed from the integration. The design allows the platform to prohibit allocations when needed. 
 
 **Common error:** non-preallocated candle buffers — allocate them via `extend_candles` if required.
 
@@ -132,4 +132,4 @@ Execute only off chain tests
 cargo test
 ```
 Execute all tests
-# dflow-deriverse
+# titan-deriverse

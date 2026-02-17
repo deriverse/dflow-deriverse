@@ -1,4 +1,4 @@
 [workspace]
-members = ["dflow-deriverse", "dflow-amm-interface"]
-# dflow-amm-interface - local copy with extended Swap enum
+members = ["titan-deriverse", "jupiter-amm-interface"]
+# jupiter-amm-interface - local copy with extended Swap enum
 resolver = "2"
