@@ -12,6 +12,7 @@ pub mod tests {
         use drv_models::{
             constants::{DF, nulls::NULL_ORDER, trading_limitations::MAX_PRICE},
             state::{
+                candles::CandlesAccountHeader,
                 community_account_header::CommunityAccountHeader,
                 instrument::InstrAccountHeader,
                 spots::spot_account_header::SpotTradeAccountHeaderNonGen,
@@ -626,6 +627,14 @@ pub mod tests {
                 default_account_with_data(bytes_of(&TokenState::zeroed()).to_vec()),
             );
 
+            if let Some(candles) = deriverse.accounts_ctx.candles {
+                let header = CandlesAccountHeader::<0>::zeroed();
+                let header = bytes_of(&header);
+                accounts_map.insert(candles.0, default_account_with_data(header.to_vec()));
+                accounts_map.insert(candles.1, default_account_with_data(header.to_vec()));
+                accounts_map.insert(candles.2, default_account_with_data(header.to_vec()));
+            }
+
             let mut new_deriverse = Deriverse::from_keyed_account(
                 &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
                 &AmmContext {
@@ -1037,6 +1046,14 @@ pub mod tests {
                     default_account_with_object(deriverse.instr_header.as_ref()),
                 );
 
+                if let Some(candles) = deriverse.accounts_ctx.candles {
+                    let header = CandlesAccountHeader::<0>::zeroed();
+                    let header = bytes_of(&header);
+                    accounts_map.insert(candles.0, default_account_with_data(header.to_vec()));
+                    accounts_map.insert(candles.1, default_account_with_data(header.to_vec()));
+                    accounts_map.insert(candles.2, default_account_with_data(header.to_vec()));
+                }
+
                 let mut new_deriverse = Deriverse::from_keyed_account(
                     &build_key_account(instruction_builder_params).unwrap(),
                     &AmmContext {
@@ -1227,6 +1244,14 @@ pub mod tests {
                     deriverse.accounts_ctx.instr_header,
                     default_account_with_object(deriverse.instr_header.as_ref()),
                 );
+
+                if let Some(candles) = deriverse.accounts_ctx.candles {
+                    let header = CandlesAccountHeader::<0>::zeroed();
+                    let header = bytes_of(&header);
+                    accounts_map.insert(candles.0, default_account_with_data(header.to_vec()));
+                    accounts_map.insert(candles.1, default_account_with_data(header.to_vec()));
+                    accounts_map.insert(candles.2, default_account_with_data(header.to_vec()));
+                }
 
                 let mut new_deriverse = Deriverse::from_keyed_account(
                     &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
@@ -1614,6 +1639,14 @@ pub mod tests {
                     deriverse.accounts_ctx.instr_header,
                     default_account_with_object(deriverse.instr_header.as_ref()),
                 );
+
+                if let Some(candles) = deriverse.accounts_ctx.candles {
+                    let header = CandlesAccountHeader::<0>::zeroed();
+                    let header = bytes_of(&header);
+                    accounts_map.insert(candles.0, default_account_with_data(header.to_vec()));
+                    accounts_map.insert(candles.1, default_account_with_data(header.to_vec()));
+                    accounts_map.insert(candles.2, default_account_with_data(header.to_vec()));
+                }
 
                 let mut new_deriverse = Deriverse::from_keyed_account(
                     &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
@@ -2296,7 +2329,7 @@ pub mod tests {
                 false,
                 false,
                 Some(SwapReferralParams {
-                    fee_rate_factor: 1.0,
+                    fee_rate_factor: 10.0,
                     client_mint_token_acc: ref_taker_ata,
                 }),
             );
