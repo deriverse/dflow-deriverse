@@ -9,7 +9,7 @@ anyhow = "1.0.100"
 bytemuck = { version = "1.23.0" }
 solana-sdk = { version = "3.0.0" }
 rust_decimal = "1.39.0"
-drv-models = { git = "ssh://git@github.com/deriverse/drv-smart-contract-common.git", rev = "07db6515408ccff1f30533183942fd4b05b23696" }
+drv-models = { git = "ssh://git@github.com/deriverse/drv-smart-contract-common.git", rev = "23a9d68b079ae76f7de67caf1690488589024fcb" }
 spl-token-interface = { version = "2.0.0" }
 spl-token-2022-interface = { version = "2.1.0" }
 solana-address-lookup-table-interface = { version = "3.0.0", features = [

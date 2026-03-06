@@ -876,8 +876,8 @@ dependencies = [
 
 [[package]]
 name = "drv-macros"
-version = "0.2.29"
-source = "git+ssh://git@github.com/deriverse/drv-smart-contract-common.git?rev=07db6515408ccff1f30533183942fd4b05b23696#07db6515408ccff1f30533183942fd4b05b23696"
+version = "0.2.32"
+source = "git+ssh://git@github.com/deriverse/drv-smart-contract-common.git?rev=23a9d68b079ae76f7de67caf1690488589024fcb#23a9d68b079ae76f7de67caf1690488589024fcb"
 dependencies = [
  "lazy_static",
  "proc-macro2",
@@ -887,14 +887,15 @@ dependencies = [
 
 [[package]]
 name = "drv-models"
-version = "0.2.29"
-source = "git+ssh://git@github.com/deriverse/drv-smart-contract-common.git?rev=07db6515408ccff1f30533183942fd4b05b23696#07db6515408ccff1f30533183942fd4b05b23696"
+version = "0.2.32"
+source = "git+ssh://git@github.com/deriverse/drv-smart-contract-common.git?rev=23a9d68b079ae76f7de67caf1690488589024fcb#23a9d68b079ae76f7de67caf1690488589024fcb"
 dependencies = [
  "bytemuck",
  "drv-macros",
  "serde",
  "serde_json",
- "solana-program",
+ "solana-program-error",
+ "solana-pubkey 3.0.0",
 ]
 
 [[package]]
