@@ -406,15 +406,21 @@ impl Amm for Deriverse {
 
         let mut client_tokens: i64 = 0;
         let mut client_mints: i64 = 0;
+        let mut swap_fees: i64 = 0;
+        let swap_fee_rate = swap_referral_params
+            .as_ref()
+            .map(|params| params.fee_rate_factor)
+            .unwrap_or(0.0);
 
         if buy && (price > px || order_book.cross(price, OrderSide::Ask)) {
-            let input_sum = (quote_params.amount as f64
-                / (1.0
-                    + fee_rate
-                    + swap_referral_params
-                        .as_ref()
-                        .map(|params| params.fee_rate_factor)
-                        .unwrap_or(0.0))) as i64;
+            let input_sum = (quote_params.amount as f64 / (1.0 + fee_rate + swap_fee_rate)) as i64;
+
+            if swap_fee_rate > 0.0 {
+                swap_fees = (input_sum as f64 * swap_fee_rate) as i64;
+            }
+
+            let estimated_fees = (quote_params.amount as i64 - input_sum - swap_fees).max(0);
+
             let mut remaining_sum = input_sum;
             let mut qty = 0_i64;
             let mut total_fees = 0_i64;
@@ -647,17 +653,19 @@ impl Amm for Deriverse {
                 }
             }
 
+            if remaining_sum <= 1 {
+                total_fees = estimated_fees + remaining_sum;
+            }
+
             client_tokens += qty;
             let traded_sum = input_sum - remaining_sum;
             client_mints -= traded_sum;
 
-            let additional_fees = if let Some(params) = swap_referral_params {
-                (traded_sum as f64 * params.fee_rate_factor) as i64
-            } else {
-                0
-            };
+            if remaining_sum > 1 && swap_fee_rate > 0.0 {
+                swap_fees = (traded_sum as f64 * swap_fee_rate) as i64;
+            }
 
-            client_mints -= total_fees + additional_fees;
+            client_mints -= total_fees + swap_fees;
         } else if !buy && (price < px || order_book.cross(price, OrderSide::Bid)) {
             let mut remaining_qty = quote_params.amount as i64;
             let mut sum = 0_i64;
