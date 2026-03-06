@@ -83,32 +83,7 @@ pub mod tests {
             };
 
             let params = to_value(ParamsWrapper {
-                swap_ref_params: None,
                 instruction_builder_params: params,
-            })?;
-
-            Ok(KeyedAccount {
-                key: Pubkey::new_unique(),
-                account: default_account_with_object(&header),
-                params: Some(params),
-            })
-        }
-
-        fn build_key_account_with_params(
-            instruction_builder_params: InstructionBuilderParams,
-            swap_referral_params: SwapReferralParams,
-        ) -> Result<KeyedAccount> {
-            let header = InstrAccountHeader {
-                asset_mint: TOKEN_A.mint,
-                crncy_mint: TOKEN_B.mint,
-                asset_token_id: TOKEN_A.token_id,
-                crncy_token_id: TOKEN_B.token_id,
-                ..Zeroable::zeroed()
-            };
-
-            let params = to_value(ParamsWrapper {
-                swap_ref_params: Some(swap_referral_params),
-                instruction_builder_params: instruction_builder_params,
             })?;
 
             Ok(KeyedAccount {
@@ -229,40 +204,6 @@ pub mod tests {
                 },
             )
             .unwrap();
-
-            println!("Ctx: {:?}", deriverse.accounts_ctx);
-
-            println!(
-                "Accounts to update: {:?}",
-                deriverse.get_accounts_to_update()
-            );
-        }
-
-        #[test]
-        fn get_accounts_to_update_with_params() {
-            let deriverse = Deriverse::from_keyed_account(
-                &build_key_account_with_params(
-                    InstructionBuilderParams { ata_init: false },
-                    SwapReferralParams {
-                        fee_rate_factor: 0.0001,
-                        client_mint_token_acc: Pubkey::new_unique(),
-                    },
-                )
-                .unwrap(),
-                &AmmContext {
-                    clock_ref: ClockRef::default(),
-                },
-            )
-            .unwrap();
-
-            assert_eq!(
-                deriverse
-                    .swap_referral_params
-                    .clone()
-                    .unwrap()
-                    .fee_rate_factor,
-                0.0001
-            );
 
             println!("Ctx: {:?}", deriverse.accounts_ctx);
 
@@ -667,21 +608,15 @@ pub mod tests {
 
         pub mod test_quote_order_book_only {
 
+            use drv_models::constants::SWAP_FEE_RATE;
+
             use super::*;
 
-            fn init_deriverse(
-                instruction_builder_params: InstructionBuilderParams,
-                additional_params: Option<SwapReferralParams>,
-            ) -> Deriverse {
+            fn init_deriverse(instruction_builder_params: InstructionBuilderParams) -> Deriverse {
                 let mut accounts_map = AccountMap::with_hasher(ahash::RandomState::new());
 
                 let mut deriverse = Deriverse::from_keyed_account(
-                    &if let Some(params) = additional_params {
-                        build_key_account_with_params(instruction_builder_params.clone(), params)
-                            .unwrap()
-                    } else {
-                        build_key_account(instruction_builder_params.clone()).unwrap()
-                    },
+                    &build_key_account(instruction_builder_params.clone()).unwrap(),
                     &AmmContext {
                         clock_ref: ClockRef::default(),
                     },
@@ -1062,8 +997,6 @@ pub mod tests {
                 )
                 .unwrap();
 
-                new_deriverse.swap_referral_params = deriverse.swap_referral_params;
-
                 new_deriverse.update(&accounts_map).unwrap();
 
                 new_deriverse
@@ -1071,15 +1004,7 @@ pub mod tests {
 
             #[test]
             fn partial_fill_sell_with_swap_fees() {
-                let swap_ref_params = SwapReferralParams {
-                    fee_rate_factor: 0.0002,
-                    client_mint_token_acc: Pubkey::new_unique(),
-                };
-
-                let deriverse = init_deriverse(
-                    InstructionBuilderParams { ata_init: false },
-                    Some(swap_ref_params.clone()),
-                );
+                let deriverse = init_deriverse(InstructionBuilderParams { ata_init: false });
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -1096,7 +1021,7 @@ pub mod tests {
                     * get_dec_factor(TOKEN_B.decs_count as u8) as f64)
                     as u64;
 
-                expected -= (expected as f64 * swap_ref_params.fee_rate_factor) as u64;
+                expected -= (expected as f64 * SWAP_FEE_RATE) as u64;
 
                 let diff = (result.out_amount as i64 - expected as i64).abs();
 
@@ -1110,34 +1035,8 @@ pub mod tests {
             }
 
             #[test]
-            fn partial_fill_sell() {
-                let deriverse = init_deriverse(InstructionBuilderParams { ata_init: false }, None);
-
-                let result = deriverse
-                    .quote(&QuoteParams {
-                        amount: 140_000,
-                        input_mint: TOKEN_A.mint,
-                        output_mint: TOKEN_B.mint,
-                        swap_mode: SwapMode::ExactIn,
-                    })
-                    .unwrap();
-
-                let expected = (140_000 as f64 / get_dec_factor(TOKEN_A.decs_count as u8) as f64
-                    * (10.4 * 100_000.0 / 140_000.0 + 10.1 * 40_000.0 / 140_000.0)
-                    * get_dec_factor(TOKEN_B.decs_count as u8) as f64)
-                    as u64;
-
-                let diff = result.out_amount - expected;
-
-                assert!(
-                    (diff as f64) < expected as f64 * 0.001,
-                    "Calculations are not presize enough"
-                );
-            }
-
-            #[test]
             fn full_fill_sell() {
-                let deriverse = init_deriverse(InstructionBuilderParams { ata_init: false }, None);
+                let deriverse = init_deriverse(InstructionBuilderParams { ata_init: false });
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -1148,10 +1047,10 @@ pub mod tests {
                     })
                     .unwrap();
 
-                let expected = (200_000 as f64 / get_dec_factor(TOKEN_A.decs_count as u8) as f64
+                let expected = ((200_000 as f64 / get_dec_factor(TOKEN_A.decs_count as u8) as f64
                     * (10.4 * 100_000.0 / 200_000.0 + 10.1 * 100_000.0 / 200_000.0)
                     * get_dec_factor(TOKEN_B.decs_count as u8) as f64)
-                    as u64;
+                    * (1.0 - SWAP_FEE_RATE)) as u64;
 
                 let diff = result.out_amount - expected;
 
@@ -1163,7 +1062,7 @@ pub mod tests {
 
             #[test]
             fn partial_fill_buy() {
-                let deriverse = init_deriverse(InstructionBuilderParams { ata_init: false }, None);
+                let deriverse = init_deriverse(InstructionBuilderParams { ata_init: false });
 
                 let result = deriverse
                     .quote(&QuoteParams {
@@ -1189,6 +1088,8 @@ pub mod tests {
         }
 
         pub mod test_quote_amm_only {
+            use drv_models::constants::SWAP_FEE_RATE;
+
             use super::*;
 
             fn init_deriverse() -> Deriverse {
@@ -1281,8 +1182,8 @@ pub mod tests {
 
                 let expected = (result.in_amount as f64
                     * 10.0
-                    * (get_dec_factor((TOKEN_B.decs_count - TOKEN_A.decs_count) as u8) as f64))
-                    as u64;
+                    * (get_dec_factor((TOKEN_B.decs_count - TOKEN_A.decs_count) as u8) as f64)
+                    * (1.0 - SWAP_FEE_RATE)) as u64;
                 println!("Expected: {}", expected);
                 let diff = (result.out_amount as i64 - expected as i64).abs() as u64;
 
@@ -1314,10 +1215,10 @@ pub mod tests {
                 println!("In Amount: {}", result.in_amount);
                 println!("Out Amount: {}", result.out_amount);
 
-                let expected = (result.in_amount as f64
+                let expected = ((result.in_amount as f64
                     / 10.0
                     / (get_dec_factor((TOKEN_B.decs_count - TOKEN_A.decs_count) as u8) as f64))
-                    as u64;
+                    * (1.0 - SWAP_FEE_RATE)) as u64;
                 println!("Expected: {}", expected);
                 let diff = (result.out_amount as i64 - expected as i64).abs();
 
@@ -1331,6 +1232,8 @@ pub mod tests {
         }
 
         pub mod test_order_book_and_amm {
+            use drv_models::constants::SWAP_FEE_RATE;
+
             use super::*;
 
             fn init_deriverse() -> Deriverse {
@@ -1674,10 +1577,10 @@ pub mod tests {
                     })
                     .unwrap();
 
-                let expected = (result.in_amount as f64
+                let expected = ((result.in_amount as f64
                     * 10.08
                     * (get_dec_factor((TOKEN_B.decs_count - TOKEN_A.decs_count) as u8) as f64))
-                    as u64;
+                    * (1.0 - SWAP_FEE_RATE)) as u64;
 
                 println!("Result: {:?}", result);
                 println!("Expected: {}", expected);
@@ -1717,8 +1620,8 @@ pub mod tests {
                 println!("Out Amount: {}", result.out_amount);
 
                 let expected = ((1_400_000_000 as f64 / 10.5)
-                    / (get_dec_factor((TOKEN_B.decs_count - TOKEN_A.decs_count) as u8) as f64))
-                    as u64;
+                    / (get_dec_factor((TOKEN_B.decs_count - TOKEN_A.decs_count) as u8) as f64)
+                    * (1.0 - SWAP_FEE_RATE)) as u64;
                 println!("Expected: {}", expected);
                 let diff = (result.out_amount as i64 - expected as i64).abs();
 
@@ -1801,11 +1704,7 @@ pub mod tests {
             }
         }
 
-        fn build_key_account(
-            ata_init: bool,
-            realloc_allowed: bool,
-            swap_ref_params: Option<SwapReferralParams>,
-        ) -> KeyedAccount {
+        fn build_key_account(ata_init: bool, realloc_allowed: bool) -> KeyedAccount {
             let a_token_state = {
                 let addr = TOKEN_A.new_token_acc();
                 let acc = RPC.get_account(&addr).unwrap();
@@ -1822,7 +1721,6 @@ pub mod tests {
             let keyd_acc = RPC.get_account(&keyd_addr).unwrap();
 
             let params = to_value(ParamsWrapper {
-                swap_ref_params: swap_ref_params,
                 instruction_builder_params: InstructionBuilderParams { ata_init },
             })
             .unwrap();
@@ -1900,7 +1798,7 @@ pub mod tests {
 
         #[test]
         fn test_build_key_account() {
-            let keyd_account = build_key_account(false, true, None);
+            let keyd_account = build_key_account(false, true);
 
             let mut deriverse = Deriverse::from_keyed_account(
                 &keyd_account,
@@ -1970,7 +1868,7 @@ pub mod tests {
 
         #[test]
         fn test_deriverse() {
-            let keyd_account = build_key_account(false, false, None);
+            let keyd_account = build_key_account(false, false);
 
             let mut deriverse = Deriverse::from_keyed_account(
                 &keyd_account,
@@ -2123,7 +2021,7 @@ pub mod tests {
 
         #[test]
         fn test_ata_creation() {
-            let keyd_account = build_key_account(true, false, None);
+            let keyd_account = build_key_account(true, false);
 
             let mut deriverse = Deriverse::from_keyed_account(
                 &keyd_account,
@@ -2315,196 +2213,6 @@ pub mod tests {
 
             let result = RPC.send_and_confirm_transaction(&tx).unwrap();
             println!("Result {}", result);
-        }
-
-        #[test]
-        fn test_swap_ref_params() {
-            let ref_taker_ata = get_associated_token_address_with_program_id(
-                &CLIENT_A.pubkey(),
-                &TOKEN_B,
-                &spl_token_interface::id(),
-            );
-
-            let keyd_account = build_key_account(
-                false,
-                false,
-                Some(SwapReferralParams {
-                    fee_rate_factor: 10.0,
-                    client_mint_token_acc: ref_taker_ata,
-                }),
-            );
-
-            let mut deriverse = Deriverse::from_keyed_account(
-                &keyd_account,
-                &AmmContext {
-                    clock_ref: ClockRef::default(),
-                },
-            )
-            .unwrap();
-
-            let accounts_to_update = deriverse.get_accounts_to_update();
-
-            let accounts_map = RPC
-                .get_multiple_accounts(&accounts_to_update)
-                .unwrap()
-                .iter()
-                .enumerate()
-                .fold(HashMap::new(), |mut m, (index, account)| {
-                    if let Some(account) = account {
-                        m.insert(accounts_to_update[index], account.clone());
-                    }
-                    m
-                });
-
-            deriverse.update(&accounts_map).unwrap();
-
-            let in_amount = get_dec_factor((deriverse.b_token_state.mask & 0xFF) as u8) as u64 - 2;
-
-            let quote_result = deriverse
-                .quote(&dflow_amm_interface::QuoteParams {
-                    amount: in_amount,
-                    input_mint: TOKEN_A,
-                    output_mint: TOKEN_B,
-                    swap_mode: dflow_amm_interface::SwapMode::ExactIn,
-                })
-                .unwrap();
-
-            println!("Result: {:?}", quote_result);
-
-            println!("Program id: {}", deriverse.a_program_id);
-            println!("Program id: {}", deriverse.b_program_id);
-
-            let a_ata = get_associated_token_address_with_program_id(
-                &CLIENT_B.pubkey(),
-                &TOKEN_A,
-                &deriverse.a_program_id,
-            );
-
-            let b_ata = get_associated_token_address_with_program_id(
-                &CLIENT_B.pubkey(),
-                &TOKEN_B,
-                &deriverse.a_program_id,
-            );
-
-            let a_balance_before = {
-                let account = RPC.get_account(&a_ata);
-
-                account
-                    .map(|acc| u64::from_le_bytes(acc.data[64..72].try_into().unwrap()))
-                    .unwrap_or(0)
-            };
-
-            let b_balance_before = {
-                let account = RPC.get_account(&b_ata);
-
-                account
-                    .map(|acc| u64::from_le_bytes(acc.data[64..72].try_into().unwrap()))
-                    .unwrap_or(0)
-            };
-
-            let ref_taker_balance_before = {
-                let account = RPC.get_account(&ref_taker_ata);
-
-                account
-                    .map(|acc| u64::from_le_bytes(acc.data[64..72].try_into().unwrap()))
-                    .unwrap_or(0)
-            };
-
-            println!("A before: {}", a_balance_before);
-            println!("B before: {}", b_balance_before);
-
-            if !deriverse.is_active() {
-                panic!("Deriverse is not active for trading")
-            }
-
-            let SwapAndAccountMetas {
-                swap,
-                account_metas,
-            } = deriverse
-                .get_swap_and_account_metas(&SwapParams {
-                    in_amount,
-                    source_mint: TOKEN_A,
-                    destination_mint: TOKEN_B,
-                    source_token_account: a_ata,
-                    destination_token_account: b_ata,
-                    token_transfer_authority: CLIENT_B.pubkey(),
-                })
-                .unwrap();
-
-            let instruction_data = from_swap(swap, in_amount);
-
-            let ix = Instruction::new_with_bytes(
-                program_id::id(),
-                bytes_of(&instruction_data),
-                account_metas,
-            );
-
-            let mut tx = Transaction::new_with_payer(&[ix], Some(&CLIENT_B.pubkey()));
-            tx.sign(
-                &[CLIENT_B.insecure_clone()],
-                RPC.get_latest_blockhash().unwrap(),
-            );
-
-            println!(
-                "Signature: {}",
-                RPC.send_and_confirm_transaction(&tx).unwrap()
-            );
-
-            let a_balance_after = {
-                let account = RPC.get_account(&a_ata).unwrap();
-
-                u64::from_le_bytes(account.data[64..72].try_into().unwrap())
-            };
-
-            let b_balance_after = {
-                let account = RPC.get_account(&b_ata).unwrap();
-
-                u64::from_le_bytes(account.data[64..72].try_into().unwrap())
-            };
-
-            let ref_taker_balance_after = {
-                let account = RPC.get_account(&ref_taker_ata).unwrap();
-
-                u64::from_le_bytes(account.data[64..72].try_into().unwrap())
-            };
-
-            assert!(a_balance_after < a_balance_before, "Incorrect order side");
-            assert!(b_balance_after > b_balance_before, "Incorrect order side");
-
-            assert!(
-                (quote_result.in_amount as i64
-                    - (a_balance_after as i64 - a_balance_before as i64).abs())
-                    < (quote_result.in_amount as f64 * 0.012) as i64,
-                "Calculations of quote where not precise enough"
-            );
-
-            assert!(
-                (quote_result.out_amount as i64
-                    - (b_balance_after as i64 - b_balance_before as i64).abs())
-                    < (quote_result.out_amount as f64 * 0.012) as i64,
-                "Calculations of quote where not precise enough"
-            );
-
-            println!("A before: {}", a_balance_after);
-            println!("B before: {}", b_balance_after);
-            println!(
-                "A exchanged: {}",
-                a_balance_after as i64 - a_balance_before as i64
-            );
-            println!(
-                "B exchanged: {}",
-                b_balance_after as i64 - b_balance_before as i64
-            );
-
-            assert!(
-                ref_taker_balance_after > ref_taker_balance_before,
-                "Ref taker didnt receive any payments"
-            );
-
-            println!(
-                "Ref payment {}",
-                ref_taker_balance_after - ref_taker_balance_before
-            )
         }
     }
 }

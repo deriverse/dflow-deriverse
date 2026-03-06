@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use bytemuck::{Pod, Zeroable, from_bytes};
 use drv_models::{
-    constants::{MAX_SWAP_FEE_RATE, candles::CANDLES, voting::FEE_RATE_STEP},
+    constants::{SWAP_FEE_RATE, candles::CANDLES, voting::FEE_RATE_STEP},
     instruction_constants::{DrvInstruction, SwapInstruction},
     instruction_data::SwapData,
     new_types::instrument::InstrId,
@@ -163,7 +163,6 @@ pub struct InstructionBuilderParams {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParamsWrapper {
-    swap_ref_params: Option<SwapReferralParams>,
     instruction_builder_params: InstructionBuilderParams,
 }
 
@@ -206,7 +205,6 @@ struct Deriverse {
     order_book: OrderBook,
     amm: DeriverseAmm,
     fee_rate_factor: f64,
-    swap_referral_params: Option<SwapReferralParams>,
     instruction_builder_params: InstructionBuilderParams,
     candles: Option<Candles>,
     a_program_id: Pubkey,
@@ -241,20 +239,13 @@ impl Amm for Deriverse {
             &keyed_account.account.data.as_slice()[..std::mem::size_of::<InstrAccountHeader>()],
         ));
 
-        let mut accounts_ctx = ContextAccounts::build(instr_header.as_ref());
+        let accounts_ctx = ContextAccounts::build(instr_header.as_ref());
 
-        let mut params: ParamsWrapper = if let Some(ref params) = keyed_account.params {
+        let params: ParamsWrapper = if let Some(ref params) = keyed_account.params {
             from_value(params.clone())?
         } else {
             bail!("Need params were not provided in KeydAccount");
         };
-
-        if let Some(ref mut swap_ref_params) = params.swap_ref_params {
-            swap_ref_params.fee_rate_factor = swap_ref_params
-                .fee_rate_factor
-                .min(MAX_SWAP_FEE_RATE)
-                .max(0.0);
-        }
 
         Ok(Deriverse {
             instr_header,
@@ -266,7 +257,6 @@ impl Amm for Deriverse {
             fee_rate_factor: 0.0,
             a_program_id: solana_system_interface::program::id(),
             b_program_id: solana_system_interface::program::id(),
-            swap_referral_params: params.swap_ref_params,
             instruction_builder_params: params.instruction_builder_params,
             candles: None,
         })
@@ -291,7 +281,6 @@ impl Amm for Deriverse {
     fn get_accounts_len(&self) -> usize {
         SwapInstruction::MIN_ACCOUNTS
             + (self.a_program_id != self.b_program_id) as usize
-            + self.swap_referral_params.is_some() as usize
             + self.instruction_builder_params.ata_init as usize * 2
     }
 
@@ -387,7 +376,6 @@ impl Amm for Deriverse {
             order_book,
             amm,
             fee_rate_factor,
-            swap_referral_params,
             ..
         } = self;
 
@@ -406,18 +394,12 @@ impl Amm for Deriverse {
 
         let mut client_tokens: i64 = 0;
         let mut client_mints: i64 = 0;
-        let mut swap_fees: i64 = 0;
-        let swap_fee_rate = swap_referral_params
-            .as_ref()
-            .map(|params| params.fee_rate_factor)
-            .unwrap_or(0.0);
+        let mut swap_fees: i64;
 
         if buy && (price > px || order_book.cross(price, OrderSide::Ask)) {
-            let input_sum = (quote_params.amount as f64 / (1.0 + fee_rate + swap_fee_rate)) as i64;
+            let input_sum = (quote_params.amount as f64 / (1.0 + fee_rate + SWAP_FEE_RATE)) as i64;
 
-            if swap_fee_rate > 0.0 {
-                swap_fees = (input_sum as f64 * swap_fee_rate) as i64;
-            }
+            swap_fees = (input_sum as f64 * SWAP_FEE_RATE) as i64;
 
             let estimated_fees = (quote_params.amount as i64 - input_sum - swap_fees).max(0);
 
@@ -661,8 +643,8 @@ impl Amm for Deriverse {
             let traded_sum = input_sum - remaining_sum;
             client_mints -= traded_sum;
 
-            if remaining_sum > 1 && swap_fee_rate > 0.0 {
-                swap_fees = (traded_sum as f64 * swap_fee_rate) as i64;
+            if remaining_sum > 1 {
+                swap_fees = (traded_sum as f64 * SWAP_FEE_RATE) as i64;
             }
 
             client_mints -= total_fees + swap_fees;
@@ -877,13 +859,9 @@ impl Amm for Deriverse {
             client_tokens -= quote_params.amount as i64 - remaining_qty;
             client_mints += sum;
 
-            let additional_fees = if let Some(params) = swap_referral_params {
-                (sum as f64 * params.fee_rate_factor) as i64
-            } else {
-                0
-            };
+            swap_fees = (sum as f64 * SWAP_FEE_RATE) as i64;
 
-            client_mints -= total_fees + additional_fees;
+            client_mints -= total_fees + swap_fees;
         }
 
         if client_tokens == 0 || client_mints == 0 {
@@ -892,12 +870,12 @@ impl Amm for Deriverse {
 
         if buy {
             Ok(Quote {
-                in_amount: (-1 * client_mints) as u64,
+                in_amount: (-client_mints) as u64,
                 out_amount: client_tokens as u64,
             })
         } else {
             Ok(Quote {
-                in_amount: (-1 * client_tokens) as u64,
+                in_amount: (-client_tokens) as u64,
                 out_amount: client_mints as u64,
             })
         }
@@ -914,7 +892,6 @@ impl Amm for Deriverse {
             b_token_state,
             a_program_id,
             b_program_id,
-            swap_referral_params,
             instruction_builder_params,
             ..
         } = self;
@@ -1110,14 +1087,6 @@ impl Amm for Deriverse {
             },
         ]);
 
-        if let Some(params) = swap_referral_params {
-            account_metas.extend_from_slice(&[AccountMeta {
-                pubkey: params.client_mint_token_acc,
-                is_signer: false,
-                is_writable: true,
-            }]);
-        }
-
         account_metas.push(AccountMeta {
             pubkey: *a_program_id,
             is_signer: false,
@@ -1147,10 +1116,6 @@ impl Amm for Deriverse {
 
         Ok(SwapAndAccountMetas {
             swap: Swap::Deriverse {
-                swap_fee_rate: swap_referral_params
-                    .clone()
-                    .map(|params| params.fee_rate_factor)
-                    .unwrap_or(0.0),
                 side,
                 instr_id: *instr_header.instr_id,
             },
@@ -1190,19 +1155,13 @@ impl Amm for Deriverse {
 }
 
 fn from_swap(swap: Swap, in_amount: u64) -> SwapData {
-    if let Swap::Deriverse {
-        side,
-        instr_id,
-        swap_fee_rate,
-    } = swap
-    {
+    if let Swap::Deriverse { side, instr_id } = swap {
         SwapData {
             tag: SwapInstruction::INSTRUCTION_NUMBER,
             input_crncy: (side == Side::Bid) as u8,
             instr_id: InstrId(instr_id),
             price: 0,
             amount: in_amount as i64,
-            ref_fee_rate: swap_fee_rate,
             ..SwapData::zeroed()
         }
     } else {

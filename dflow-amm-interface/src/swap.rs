@@ -12,6 +12,5 @@ pub enum Swap {
     Deriverse {
         side: Side,
         instr_id: u32,
-        swap_fee_rate: f64,
     },
 }
