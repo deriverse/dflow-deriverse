@@ -1,7 +1,6 @@
 #[cfg(test)]
 pub mod tests {
 
-    #[cfg(not(feature = "rpc-test"))]
     pub mod integration_tests {
         use anyhow::Result;
 
@@ -1635,6 +1634,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(feature = "rpc-test")]
     pub mod rpc_tests {
 
         use ahash::{HashMap, HashMapExt};
@@ -1894,7 +1894,7 @@ pub mod tests {
 
             deriverse.update(&accounts_map).unwrap();
 
-            let in_amount = get_dec_factor((deriverse.b_token_state.mask & 0xFF) as u8) as u64 - 2;
+            let in_amount = get_dec_factor(deriverse.b_token_state.mask.decimals()) as u64 - 2;
 
             let quote_result = deriverse
                 .quote(&dflow_amm_interface::QuoteParams {
@@ -2047,7 +2047,7 @@ pub mod tests {
 
             deriverse.update(&accounts_map).unwrap();
 
-            let in_amount = get_dec_factor((deriverse.b_token_state.mask & 0xFF) as u8) as u64 - 2;
+            let in_amount = get_dec_factor(deriverse.b_token_state.mask.decimals()) as u64 - 2;
 
             let quote_result = deriverse
                 .quote(&dflow_amm_interface::QuoteParams {
@@ -2197,7 +2197,7 @@ pub mod tests {
                 &CLIENT_C.pubkey(),
                 &[&CLIENT_C.pubkey()],
                 b_balance_after,
-                (deriverse.b_token_state.mask & 0xFF) as u8,
+                deriverse.b_token_state.mask.decimals(),
             )
             .unwrap();
 
@@ -2213,6 +2213,166 @@ pub mod tests {
 
             let result = RPC.send_and_confirm_transaction(&tx).unwrap();
             println!("Result {}", result);
+        }
+    }
+
+    #[cfg(feature = "mainnet-test")]
+    pub mod mainnet_tests {
+        use ahash::{HashMap, HashMapExt};
+        use dflow_amm_interface::{Amm, SwapMode};
+        use dflow_amm_interface::{AmmContext, ClockRef, KeyedAccount};
+        use drv_models::state::{token::TokenState, types::account_type::INSTR};
+        use once_cell::sync::Lazy;
+        use serde_json::to_value;
+        use solana_client::{rpc_client::RpcClient, rpc_config::CommitmentConfig};
+        use solana_sdk::pubkey::Pubkey;
+
+        use crate::{
+            Deriverse, InstructionBuilderParams, ParamsWrapper, SwapReferralParams,
+            helper::Helper,
+            tests::tests::mainnet_tests::config::{TOKEN_A, TOKEN_B},
+        };
+
+        static RPC: Lazy<RpcClient> = Lazy::new(|| {
+            let url = "https://api.mainnet-beta.solana.com";
+
+            RpcClient::new_with_commitment(url, CommitmentConfig::confirmed())
+        });
+
+        pub mod config {
+            use solana_sdk::pubkey::Pubkey;
+
+            pub const TOKEN_A: Pubkey =
+                Pubkey::from_str_const("So11111111111111111111111111111111111111112");
+            pub const TOKEN_B: Pubkey =
+                Pubkey::from_str_const("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+        }
+
+        #[test]
+        fn test_rpc() {
+            let current_slot = RPC.get_slot().unwrap();
+
+            assert!(current_slot > 0);
+        }
+
+        fn build_key_account(
+            ata_init: bool,
+            realloc_allowed: bool,
+            swap_ref_params: Option<SwapReferralParams>,
+        ) -> KeyedAccount {
+            let b_token_state = {
+                let addr = TOKEN_B.new_token_acc();
+                let acc = RPC.get_account(&addr).unwrap();
+                unsafe { *(acc.data.as_ptr() as *const TokenState) }
+            };
+
+            println!("B token state: {}", b_token_state.address);
+
+            let a_token_state = {
+                let addr = TOKEN_A.new_token_acc();
+                let acc = RPC.get_account(&addr).unwrap();
+                unsafe { *(acc.data.as_ptr() as *const TokenState) }
+            };
+
+            println!("A token state: {}", a_token_state.address);
+
+            let keyd_addr = Pubkey::new_spot_acc(INSTR, a_token_state.id, b_token_state.id);
+            let keyd_acc = RPC.get_account(&keyd_addr).unwrap();
+
+            let params = to_value(ParamsWrapper {
+                instruction_builder_params: InstructionBuilderParams { ata_init },
+            })
+            .unwrap();
+
+            KeyedAccount {
+                key: keyd_addr,
+                account: keyd_acc,
+                params: Some(params),
+            }
+        }
+
+        #[test]
+        fn test_build_key_account() {
+            let keyd_account = build_key_account(false, true, None);
+
+            println!("Keyd account: {}", keyd_account.key);
+
+            let mut deriverse = Deriverse::from_keyed_account(
+                &keyd_account,
+                &AmmContext {
+                    clock_ref: ClockRef::default(),
+                },
+            )
+            .unwrap();
+
+            let accounts_to_update = deriverse.get_accounts_to_update();
+
+            let accounts_map = RPC
+                .get_multiple_accounts(&accounts_to_update)
+                .unwrap()
+                .iter()
+                .enumerate()
+                .fold(HashMap::new(), |mut m, (index, account)| {
+                    if let Some(account) = account {
+                        m.insert(accounts_to_update[index], account.clone());
+                    }
+                    m
+                });
+
+            deriverse.update(&accounts_map).unwrap();
+
+            println!("Ask Orders: {:?}", deriverse.order_book.ask_orders);
+            println!("Bid Orders: {:?}", deriverse.order_book.bid_orders);
+        }
+
+        #[test]
+        fn test_sol_usdc_swap() {
+            let keyd_account = build_key_account(false, true, None);
+
+            println!("Keyd account: {}", keyd_account.key);
+
+            let mut deriverse = Deriverse::from_keyed_account(
+                &keyd_account,
+                &AmmContext {
+                    clock_ref: ClockRef::default(),
+                },
+            )
+            .unwrap();
+
+            println!("Day volatility: {}", deriverse.instr_header.day_volatility);
+
+            let accounts_to_update = deriverse.get_accounts_to_update();
+
+            let accounts_map = RPC
+                .get_multiple_accounts(&accounts_to_update)
+                .unwrap()
+                .iter()
+                .enumerate()
+                .fold(HashMap::new(), |mut m, (index, account)| {
+                    if let Some(account) = account {
+                        m.insert(accounts_to_update[index], account.clone());
+                    }
+                    m
+                });
+
+            deriverse.update(&accounts_map).unwrap();
+
+            println!("Deriverse: {:?}", deriverse.amm);
+
+            println!("Dierverse ask line: {:?}", deriverse.order_book.ask_orders);
+
+            let in_amount = 67854479;
+
+            let quote_result = deriverse
+                .quote(&dflow_amm_interface::QuoteParams {
+                    amount: in_amount,
+                    input_mint: TOKEN_B,
+                    output_mint: TOKEN_A,
+                    swap_mode: SwapMode::ExactIn,
+                })
+                .unwrap();
+
+            println!("Result {:?}", quote_result);
         }
     }
 }

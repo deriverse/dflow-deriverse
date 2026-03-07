@@ -181,7 +181,7 @@ impl Context for DepositContext {
             });
         }
 
-        let qty = amount * get_dec_factor((token_state.mask & 0xFF) as u8);
+        let qty = amount * get_dec_factor(token_state.mask.decimals());
 
         let instruction_data = DepositData {
             tag: DepositInstruction::INSTRUCTION_NUMBER,

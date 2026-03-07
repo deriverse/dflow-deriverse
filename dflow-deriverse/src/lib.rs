@@ -17,6 +17,7 @@ use drv_models::{
                 SPOT_ASKS_TREE, SPOT_BID_ORDERS, SPOT_BIDS_TREE, SPOT_CLIENT_INFOS,
                 SPOT_CLIENT_INFOS2, SPOT_DAY_CANDLES, SPOT_LINES,
             },
+            instr_mask::{InstrFlag, SimpleInstrMask},
         },
     },
 };
@@ -45,7 +46,7 @@ pub mod custom_sdk;
 #[cfg(test)]
 pub mod tests;
 
-#[cfg(not(test))]
+#[cfg(any(not(test), feature = "mainnet-test"))]
 pub mod program_id {
 
     use drv_models::new_types::version::Version;
@@ -55,7 +56,7 @@ pub mod program_id {
     pub const VERSION: Version = Version(1);
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "mainnet-test")))]
 pub mod program_id {
     use drv_models::new_types::version::Version;
     use solana_sdk::declare_id;
@@ -275,7 +276,7 @@ impl Amm for Deriverse {
     }
 
     fn has_dynamic_accounts(&self) -> bool {
-        true
+        false
     }
 
     fn get_accounts_len(&self) -> usize {
@@ -390,16 +391,30 @@ impl Amm for Deriverse {
             if buy { px + max_diff } else { px - max_diff }
         };
 
-        let fee_rate = instr_header.day_volatility * fee_rate_factor;
+        let fee_rate = if instr_header.mask.get_flag(InstrFlag::FixedFees) {
+            instr_header.fixed_fee_rate
+        } else if instr_header.mask.get_flag(InstrFlag::ZeroFees) {
+            0.0
+        } else {
+            instr_header.day_volatility * fee_rate_factor
+        };
+
+        let swap_fee_rate = if instr_header.mask.get_flag(InstrFlag::ZeroFees) {
+            0.0
+        } else {
+            SWAP_FEE_RATE
+        };
 
         let mut client_tokens: i64 = 0;
         let mut client_mints: i64 = 0;
-        let mut swap_fees: i64;
+        let mut swap_fees: i64 = 0;
 
         if buy && (price > px || order_book.cross(price, OrderSide::Ask)) {
-            let input_sum = (quote_params.amount as f64 / (1.0 + fee_rate + SWAP_FEE_RATE)) as i64;
+            let input_sum = (quote_params.amount as f64 / (1.0 + fee_rate + swap_fee_rate)) as i64;
 
-            swap_fees = (input_sum as f64 * SWAP_FEE_RATE) as i64;
+            if swap_fee_rate > 0.0 {
+                swap_fees = (input_sum as f64 * swap_fee_rate) as i64;
+            }
 
             let estimated_fees = (quote_params.amount as i64 - input_sum - swap_fees).max(0);
 
@@ -420,8 +435,9 @@ impl Amm for Deriverse {
 
                 if line.is_none() {
                     if DeriverseAmm::partial_fill(amm_px, price, OrderSide::Ask) {
-                        traded_qty = amm.get_amm_qty(price, OrderSide::Ask)?;
-                        traded_mints = amm.get_amm_sum(traded_qty, OrderSide::Ask)?;
+                        let preliminary_qty = amm.get_amm_qty(price, OrderSide::Ask)?;
+                        traded_mints = amm.get_amm_sum(preliminary_qty, OrderSide::Ask)?;
+                        traded_qty = amm.get_reversed_amm_qty(traded_mints)?;
                         if traded_qty == 0 || traded_mints == 0 {
                             break;
                         }
@@ -635,16 +651,23 @@ impl Amm for Deriverse {
                 }
             }
 
-            if remaining_sum <= 1 {
-                total_fees = estimated_fees + remaining_sum;
+            client_tokens += qty;
+
+            if remaining_sum == 1 {
+                if estimated_fees > 0 {
+                    total_fees = estimated_fees + 1;
+                } else {
+                    remaining_sum = 0;
+                }
+            } else if remaining_sum == 0 {
+                total_fees = estimated_fees;
             }
 
-            client_tokens += qty;
             let traded_sum = input_sum - remaining_sum;
             client_mints -= traded_sum;
 
-            if remaining_sum > 1 {
-                swap_fees = (traded_sum as f64 * SWAP_FEE_RATE) as i64;
+            if remaining_sum > 1 && swap_fee_rate > 0.0 {
+                swap_fees = (traded_sum as f64 * swap_fee_rate) as i64;
             }
 
             client_mints -= total_fees + swap_fees;
@@ -859,7 +882,9 @@ impl Amm for Deriverse {
             client_tokens -= quote_params.amount as i64 - remaining_qty;
             client_mints += sum;
 
-            swap_fees = (sum as f64 * SWAP_FEE_RATE) as i64;
+            if swap_fee_rate > 0.0 {
+                swap_fees = (sum as f64 * swap_fee_rate) as i64;
+            }
 
             client_mints -= total_fees + swap_fees;
         }
@@ -1131,6 +1156,8 @@ impl Amm for Deriverse {
     }
 
     fn is_active(&self) -> bool {
+        let suspended_instrument = self.instr_header.mask.get_flag(InstrFlag::Suspended);
+
         let market_requirements =
             self.order_book.total_lines_count != 0 || self.instr_header.ps != 0;
 
@@ -1150,7 +1177,7 @@ impl Amm for Deriverse {
             true
         };
 
-        market_requirements && candles_requirements
+        market_requirements && candles_requirements && !suspended_instrument
     }
 }
 
