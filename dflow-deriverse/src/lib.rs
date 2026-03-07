@@ -651,11 +651,18 @@ impl Amm for Deriverse {
                 }
             }
 
-            if remaining_sum <= 1 && estimated_fees > 0 {
-                total_fees = estimated_fees + remaining_sum;
+            client_tokens += qty;
+
+            if remaining_sum == 1 {
+                if estimated_fees > 0 {
+                    total_fees = estimated_fees + 1;
+                } else {
+                    remaining_sum = 0;
+                }
+            } else if remaining_sum == 0 {
+                total_fees = estimated_fees;
             }
 
-            client_tokens += qty;
             let traded_sum = input_sum - remaining_sum;
             client_mints -= traded_sum;
 
