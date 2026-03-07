@@ -86,7 +86,7 @@ fn build_key_account() -> KeyedAccount {
  
  deriverse.update(&accounts_map).unwrap();
  
- let in_amount = get_dec_factor((deriverse.b_token_state.mask & 0xFF) as u8) as u64;
+ let in_amount = get_dec_factor((deriverse.b_token_state.mask.decimals()) as u64;
 
  let quote_result = deriverse
      .quote(&dflow_amm_interface::QuoteParams {

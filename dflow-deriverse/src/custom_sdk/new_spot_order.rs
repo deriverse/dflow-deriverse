@@ -248,7 +248,7 @@ impl Context for NewSpotOrderContext {
             },
         ];
 
-        let qty = (amount * get_dec_factor((a_token_state.mask & 0xFF) as u8) as f64) as i64;
+        let qty = (amount * get_dec_factor(a_token_state.mask.decimals()) as f64) as i64;
 
         let instruction_data = NewSpotOrderData {
             tag: NewSpotOrderInstruction::INSTRUCTION_NUMBER,
