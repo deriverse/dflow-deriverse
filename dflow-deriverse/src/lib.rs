@@ -427,6 +427,7 @@ impl Amm for Deriverse {
             let mut next_amm_px;
 
             let mut lines = order_book.iter_asks();
+            let mut exausted = false;
 
             loop {
                 let line = lines.next();
@@ -435,6 +436,7 @@ impl Amm for Deriverse {
 
                 if line.is_none() {
                     if DeriverseAmm::partial_fill(amm_px, price, OrderSide::Ask) {
+                        exausted = true;
                         let preliminary_qty = amm.get_amm_qty(price, OrderSide::Ask)?;
                         traded_mints = amm.get_amm_sum(preliminary_qty, OrderSide::Ask)?;
                         traded_qty = amm.get_reversed_amm_qty(traded_mints)?;
@@ -653,9 +655,12 @@ impl Amm for Deriverse {
 
             client_tokens += qty;
 
+            let mut incr = false;
+
             if remaining_sum == 1 {
                 if estimated_fees > 0 {
                     total_fees = estimated_fees + 1;
+                    incr = true;
                 } else {
                     remaining_sum = 0;
                 }
@@ -664,6 +669,10 @@ impl Amm for Deriverse {
             }
 
             let traded_sum = input_sum - remaining_sum;
+            total_fees = total_fees.max((traded_sum as f64 * fee_rate) as i64);
+            if exausted && fee_rate > 0.0 && !incr {
+                total_fees += 1;
+            }
             client_mints -= traded_sum;
 
             if remaining_sum > 1 && swap_fee_rate > 0.0 {
