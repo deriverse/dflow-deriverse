@@ -385,8 +385,13 @@ impl Amm for Deriverse {
         let buy = b_token_state.address == quote_params.input_mint;
 
         let px = instr_header.market_px();
+
         let price = {
-            let max_diff = px >> 3;
+            let max_diff = if instr_header.mask.get_flag(InstrFlag::SimilarAssets) {
+                px >> 4
+            } else {
+                px >> 3
+            };
 
             if buy { px + max_diff } else { px - max_diff }
         };
@@ -427,7 +432,7 @@ impl Amm for Deriverse {
             let mut next_amm_px;
 
             let mut lines = order_book.iter_asks();
-            let mut exausted = false;
+            let mut exhausted = false;
 
             loop {
                 let line = lines.next();
@@ -436,7 +441,7 @@ impl Amm for Deriverse {
 
                 if line.is_none() {
                     if DeriverseAmm::partial_fill(amm_px, price, OrderSide::Ask) {
-                        exausted = true;
+                        exhausted = true;
                         let preliminary_qty = amm.get_amm_qty(price, OrderSide::Ask)?;
                         traded_mints = amm.get_amm_sum(preliminary_qty, OrderSide::Ask)?;
                         traded_qty = amm.get_reversed_amm_qty(traded_mints)?;
@@ -670,7 +675,7 @@ impl Amm for Deriverse {
 
             let traded_sum = input_sum - remaining_sum;
             total_fees = total_fees.max((traded_sum as f64 * fee_rate) as i64);
-            if exausted && fee_rate > 0.0 && !incr {
+            if exhausted && fee_rate > 0.0 && !incr {
                 total_fees += 1;
             }
             client_mints -= traded_sum;
