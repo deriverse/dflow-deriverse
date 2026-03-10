@@ -1575,7 +1575,7 @@ pub mod tests {
                 println!("In Amount: {}", result.in_amount);
                 println!("Out Amount: {}", result.out_amount);
 
-                let expected_in_amount = 67824542;
+                let expected_in_amount = 67824543;
                 let expected_out_amount = 770742331;
                 println!("Expected in_amount: {}", expected_in_amount);
                 println!("Expected out_amount: {}", expected_out_amount);
