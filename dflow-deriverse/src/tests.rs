@@ -1786,6 +1786,8 @@ pub mod tests {
 
             deriverse.update(&accounts_map).unwrap();
 
+            println!("Deriverse instr_header: {:?}", deriverse.instr_header);
+
             println!("Ask Orders: {:?}", deriverse.order_book.ask_orders);
             println!("Bid Orders: {:?}", deriverse.order_book.bid_orders);
         }

@@ -660,12 +660,9 @@ impl Amm for Deriverse {
 
             client_tokens += qty;
 
-            let mut incr = false;
-
             if remaining_sum == 1 {
                 if estimated_fees > 0 {
                     total_fees = estimated_fees + 1;
-                    incr = true;
                 } else {
                     remaining_sum = 0;
                 }
@@ -674,17 +671,19 @@ impl Amm for Deriverse {
             }
 
             let traded_sum = input_sum - remaining_sum;
+
             total_fees = total_fees.max((traded_sum as f64 * fee_rate) as i64);
-            if exhausted && fee_rate > 0.0 && !incr {
-                total_fees += 1;
-            }
-            client_mints -= traded_sum;
 
-            if remaining_sum > 1 && swap_fee_rate > 0.0 {
-                swap_fees = (traded_sum as f64 * swap_fee_rate) as i64;
+            if remaining_sum > 1 {
+                if exhausted && fee_rate > 0.0 {
+                    total_fees += 1;
+                }
+                if swap_fee_rate > 0.0 {
+                    swap_fees = (traded_sum as f64 * swap_fee_rate) as i64 + 1;
+                }
             }
 
-            client_mints -= total_fees + swap_fees;
+            client_mints -= traded_sum + total_fees + swap_fees;
         } else if !buy && (price < px || order_book.cross(price, OrderSide::Bid)) {
             let mut remaining_qty = quote_params.amount as i64;
             let mut sum = 0_i64;
