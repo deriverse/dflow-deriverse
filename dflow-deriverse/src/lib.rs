@@ -874,7 +874,7 @@ impl Amm for Deriverse {
                             .ok_or(anyhow!("Arithmetic Overflow"))?;
                     }
 
-                    if DeriverseAmm::cover_line(next_amm_px, price, line.price, OrderSide::Bid) {
+                    if DeriverseAmm::cover_line(amm_px, price, line.price, OrderSide::Bid) {
                         let (traded_qty, traded_sum, traded_fees) =
                             self.order_book
                                 .fill(&line, remaining_qty, fee_rate, OrderSide::Bid)?;
