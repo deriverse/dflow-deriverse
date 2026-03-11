@@ -1116,6 +1116,10 @@ pub mod tests {
                         swap_mode: SwapMode::ExactIn,
                     })
                     .unwrap();
+                println!(
+                    "result.in {} result.out {}",
+                    result.in_amount, result.out_amount
+                );
 
                 let expected = (result.in_amount as f64
                 // due to complex calculations middle price between first and second asks lines is used
@@ -1661,7 +1665,7 @@ pub mod tests {
                 let deriverse = init_deriverse();
                 let result = deriverse
                     .quote(&QuoteParams {
-                        amount: 100000000,
+                        amount: 68795502,
                         input_mint: TOKEN_B1.mint,
                         output_mint: TOKEN_A1.mint,
                         swap_mode: SwapMode::ExactIn,

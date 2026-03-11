@@ -558,15 +558,16 @@ impl Amm for Deriverse {
                                     .ok_or(anyhow!("Arithmetic Overflow"))?;
                             }
                             if remaining_sum > 0 {
-                                let init_qty =
-                                    (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
+                                //let init_qty =
+                                //    (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
 
-                                let (traded_qty, traded_sum, traded_fees) = self.order_book.fill(
-                                    &line,
-                                    init_qty,
-                                    fee_rate,
-                                    OrderSide::Ask,
-                                )?;
+                                let (traded_qty, traded_sum, traded_fees) =
+                                    self.order_book.reversed_fill(
+                                        &line,
+                                        remaining_sum,
+                                        fee_rate,
+                                        OrderSide::Ask,
+                                    )?;
 
                                 qty = qty
                                     .checked_add(traded_qty)
@@ -575,8 +576,8 @@ impl Amm for Deriverse {
                                 total_fees = total_fees
                                     .checked_add(traded_fees)
                                     .ok_or(anyhow!("Arithmetic Overflow"))?;
-
-                                remaining_sum -= traded_sum;
+                                remaining_sum = 0;
+                                //remaining_sum -= traded_sum;
                             }
                         }
                         if traded_qty != 0 && traded_mints != 0 {
@@ -590,12 +591,18 @@ impl Amm for Deriverse {
 
                     next_amm_px = amm.get_reversed_amm_px(remaining_sum - line_sum)?;
                     if DeriverseAmm::cover_line(next_amm_px, price, line.price, OrderSide::Ask) {
-                        let init_qty =
-                            (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
+                        //let init_qty =
+                        //    (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
 
-                        let (traded_qty, traded_sum, traded_fees) =
-                            self.order_book
-                                .fill(&line, init_qty, fee_rate, OrderSide::Ask)?;
+                        //let (traded_qty, traded_sum, traded_fees) =
+                        //self.order_book
+                        //    .fill(&line, init_qty, fee_rate, OrderSide::Ask)?;
+                        let (traded_qty, traded_sum, traded_fees) = self.order_book.reversed_fill(
+                            &line,
+                            remaining_sum,
+                            fee_rate,
+                            OrderSide::Ask,
+                        )?;
 
                         qty = qty
                             .checked_add(traded_qty)
@@ -636,12 +643,19 @@ impl Amm for Deriverse {
                     }
 
                     if DeriverseAmm::cover_line(amm_px, price, line.price, OrderSide::Ask) {
-                        let init_qty =
-                            (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
+                        //let init_qty =
+                        //    (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
 
-                        let (traded_qty, traded_sum, traded_fees) =
-                            self.order_book
-                                .fill(&line, init_qty, fee_rate, OrderSide::Ask)?;
+                        //let (traded_qty, traded_sum, traded_fees) =
+                        //    self.order_book
+                        //        .fill(&line, init_qty, fee_rate, OrderSide::Ask)?;
+
+                        let (traded_qty, traded_sum, traded_fees) = self.order_book.reversed_fill(
+                            &line,
+                            remaining_sum,
+                            fee_rate,
+                            OrderSide::Ask,
+                        )?;
 
                         qty = qty
                             .checked_add(traded_qty)
@@ -651,7 +665,7 @@ impl Amm for Deriverse {
                             .checked_add(traded_fees)
                             .ok_or(anyhow!("Arithmetic Overflow"))?;
 
-                        remaining_sum -= traded_sum;
+                        remaining_sum = 0;
                     }
 
                     break;

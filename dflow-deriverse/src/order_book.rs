@@ -118,6 +118,16 @@ impl OrderBook {
         Ok(sum as i64)
     }
 
+    pub fn traded_qty(&self, sum: i64, price: i64) -> anyhow::Result<i64> {
+        let qty = (sum as f64 / self.rdf) / price as f64;
+
+        if qty.is_sign_negative() || qty.is_nan() {
+            bail!("Arithmetic overflow")
+        }
+
+        Ok(qty as i64)
+    }
+
     pub fn line_sum(&self, line: &PxOrders, side: OrderSide, remaining_sum: i64) -> i64 {
         let orders = match side {
             OrderSide::Bid => &self.bid_orders,
@@ -170,6 +180,44 @@ impl OrderBook {
         }
 
         total_traded_qty -= remaining_qty;
+
+        Ok((total_traded_qty, total_traded_sum, total_fees))
+    }
+
+    pub fn reversed_fill(
+        &self,
+        line: &PxOrders,
+        mut remaining_sum: i64,
+        fee_rate: f64,
+        side: OrderSide,
+    ) -> anyhow::Result<(i64, i64, i64)> {
+        let px = line.price;
+        let orders = match side {
+            OrderSide::Bid => &self.bid_orders,
+            OrderSide::Ask => &self.ask_orders,
+        };
+        let mut orders = orders.iter_from(line.begin);
+
+        let mut total_traded_sum: i64 = remaining_sum;
+        let mut total_traded_qty: i64 = 0;
+        let mut total_fees: i64 = 0;
+
+        while let Some((_, order)) = orders.next()
+            && remaining_sum > 0
+        {
+            let (traded_qty, traded_crncy) = if order.sum <= remaining_sum {
+                (order.qty, order.sum)
+            } else {
+                let potential_qty = self.traded_qty(remaining_sum, px)?;
+                (potential_qty.min(order.qty), remaining_sum)
+            };
+
+            remaining_sum -= traded_crncy;
+            total_traded_qty += traded_qty;
+            total_fees += (traded_crncy as f64 * fee_rate) as i64;
+        }
+
+        total_traded_sum -= remaining_sum;
 
         Ok((total_traded_qty, total_traded_sum, total_fees))
     }
