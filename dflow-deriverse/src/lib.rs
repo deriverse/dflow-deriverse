@@ -1188,22 +1188,10 @@ impl Amm for Deriverse {
         let market_requirements =
             self.order_book.total_lines_count != 0 || self.instr_header.ps != 0;
 
-        let candles_requirements = if let Some(Candles {
-            ref candle_1m,
-            ref candle_15m,
-            ref candle_day,
-        }) = self.candles
-        {
-            (candle_1m.count + 3 < candle_1m.buffer_len
-                || candle_1m.buffer_len >= candle_1m.capacity)
-                && (candle_15m.count + 1 < candle_15m.buffer_len
-                    || candle_15m.buffer_len >= candle_15m.capacity)
-                && (candle_day.count + 1 < candle_day.buffer_len
-                    || candle_day.buffer_len >= candle_day.capacity)
-        } else {
-            true
-        };
-
+        let candles_requirements = !self
+            .instr_header
+            .mask
+            .get_flag(InstrFlag::ExpandableCandles);
         market_requirements && candles_requirements && !suspended_instrument
     }
 }
