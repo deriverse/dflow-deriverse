@@ -7,7 +7,7 @@ use drv_models::{
         instrument::InstrAccountHeader,
         token::TokenState,
         types::{
-            OrderType,
+            CappedI64, OrderType,
             account_type::{
                 COMMUNITY, INSTR, ROOT, SPOT_1M_CANDLES, SPOT_15M_CANDLES, SPOT_ASK_ORDERS,
                 SPOT_ASKS_TREE, SPOT_BID_ORDERS, SPOT_BIDS_TREE, SPOT_CLIENT_INFOS,
@@ -23,7 +23,7 @@ use solana_sdk::{
 
 use crate::{
     custom_sdk::traits::{BuildContext, Context},
-    helper::{Helper, get_dec_factor},
+    helper::{CappedNumber, Helper, get_dec_factor},
     program_id,
 };
 
@@ -254,7 +254,7 @@ impl Context for NewSpotOrderContext {
             tag: NewSpotOrderInstruction::INSTRUCTION_NUMBER,
             order_type: OrderType::Limit as u8,
             instr_id: instr_state.instr_id,
-            amount: qty,
+            amount: CappedI64::new(qty),
             side: if qty > 0 { 0 } else { 1 },
             price: (price * DF) as i64,
             ..NewSpotOrderData::zeroed()

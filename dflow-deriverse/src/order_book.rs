@@ -1,16 +1,19 @@
 use anyhow::bail;
 use bytemuck::cast_slice;
 use drv_models::{
-    constants::{nulls::NULL_ORDER, trading_limitations::MAX_SUM},
+    constants::nulls::NULL_ORDER,
     state::{
         instrument::InstrAccountHeader,
         spots::spot_account_header::SPOT_TRADE_ACCOUNT_HEADER_SIZE,
-        types::{OrderSide, PxOrders},
+        types::{CappedI64, OrderSide, PxOrders},
     },
 };
 use solana_sdk::account::Account;
 
+use anyhow::Result;
+
 use crate::{
+    helper::CappedNumber,
     lines_linked_list::{Lines, LinesIter, LinesSugar},
     orders_linked_list::{Orders, OrdersSugar},
 };
@@ -108,52 +111,58 @@ impl OrderBook {
         }
     }
 
-    pub fn trade_sum(&self, a: i64, b: i64) -> anyhow::Result<i64> {
-        let sum = (a as f64 * b as f64) * self.rdf;
+    fn trade_sum<T: Into<i64>, U: Into<i64>>(&self, a: T, b: U) -> Result<CappedI64> {
+        let sum = (a.into() as f64 * b.into() as f64) * self.rdf;
 
-        if sum.is_sign_negative() || sum.is_nan() || sum > MAX_SUM {
+        if sum.is_sign_negative() || sum.is_nan() {
             bail!("Arithmetic overflow")
         }
 
-        Ok(sum as i64)
+        CappedI64::new_checked(sum as i64)
     }
 
-    pub fn traded_qty(&self, sum: i64, price: i64) -> anyhow::Result<i64> {
-        let qty = (sum as f64 / self.rdf) / price as f64;
+    fn trade_qty<T: Into<i64>>(&self, sum: T, price: i64) -> Result<CappedI64> {
+        let qty = (sum.into() as f64 / self.rdf) / price as f64;
 
         if qty.is_sign_negative() || qty.is_nan() {
             bail!("Arithmetic overflow")
         }
 
-        Ok(qty as i64)
+        CappedI64::new_checked(qty as i64)
     }
 
-    pub fn line_sum(&self, line: &PxOrders, side: OrderSide, remaining_sum: i64) -> i64 {
+    pub fn line_sum<T: Into<i64> + Copy>(
+        &self,
+        line: &PxOrders,
+        side: OrderSide,
+        remaining_sum: T,
+    ) -> Result<CappedI64> {
         let orders = match side {
             OrderSide::Bid => &self.bid_orders,
             OrderSide::Ask => &self.ask_orders,
         };
 
         let mut orders = orders.iter_from(line.begin);
-        let mut sum = 0;
+        let mut sum = CappedI64::new(0);
 
         while let Some((_, order)) = orders.next() {
-            sum += order.sum;
-            if sum > remaining_sum {
+            sum = sum.checked_add_capped(order.sum)?;
+
+            if sum > remaining_sum.into() {
                 break;
             }
         }
 
-        sum
+        Ok(sum)
     }
 
     pub fn fill(
         &self,
         line: &PxOrders,
-        mut remaining_qty: i64,
+        mut remaining_qty: CappedI64,
         fee_rate: f64,
         side: OrderSide,
-    ) -> anyhow::Result<(i64, i64, i64)> {
+    ) -> Result<(CappedI64, CappedI64, CappedI64)> {
         let px = line.price;
         let orders = match side {
             OrderSide::Bid => &self.bid_orders,
@@ -161,9 +170,9 @@ impl OrderBook {
         };
         let mut orders = orders.iter_from(line.begin);
 
-        let mut total_traded_qty: i64 = remaining_qty;
-        let mut total_traded_sum: i64 = 0;
-        let mut total_fees: i64 = 0;
+        let mut total_traded_qty = remaining_qty;
+        let mut total_traded_sum = CappedI64::new(0);
+        let mut total_fees = CappedI64::new(0);
 
         while let Some((_, order)) = orders.next()
             && remaining_qty > 0
@@ -174,12 +183,13 @@ impl OrderBook {
                 (remaining_qty, self.trade_sum(remaining_qty, px)?)
             };
 
-            remaining_qty -= traded_qty;
-            total_traded_sum += traded_crncy;
-            total_fees += (traded_crncy as f64 * fee_rate) as i64;
+            remaining_qty = remaining_qty.sub(traded_qty);
+            total_traded_sum = total_traded_sum.checked_add_capped(traded_crncy)?;
+            total_fees =
+                total_fees.checked_add_capped((traded_crncy.value as f64 * fee_rate) as i64)?;
         }
 
-        total_traded_qty -= remaining_qty;
+        total_traded_qty = total_traded_qty.sub(remaining_qty);
 
         Ok((total_traded_qty, total_traded_sum, total_fees))
     }
@@ -187,10 +197,10 @@ impl OrderBook {
     pub fn reversed_fill(
         &self,
         line: &PxOrders,
-        mut remaining_sum: i64,
+        mut remaining_sum: CappedI64,
         fee_rate: f64,
         side: OrderSide,
-    ) -> anyhow::Result<(i64, i64, i64)> {
+    ) -> anyhow::Result<(CappedI64, CappedI64, CappedI64)> {
         let px = line.price;
         let orders = match side {
             OrderSide::Bid => &self.bid_orders,
@@ -198,9 +208,9 @@ impl OrderBook {
         };
         let mut orders = orders.iter_from(line.begin);
 
-        let mut total_traded_sum: i64 = remaining_sum;
-        let mut total_traded_qty: i64 = 0;
-        let mut total_fees: i64 = 0;
+        let mut total_traded_sum = remaining_sum;
+        let mut total_traded_qty = CappedI64::new(0);
+        let mut total_fees = CappedI64::new(0);
 
         while let Some((_, order)) = orders.next()
             && remaining_sum > 0
@@ -208,16 +218,17 @@ impl OrderBook {
             let (traded_qty, traded_crncy) = if order.sum <= remaining_sum {
                 (order.qty, order.sum)
             } else {
-                let potential_qty = self.traded_qty(remaining_sum, px)?;
+                let potential_qty = self.trade_qty(remaining_sum, px)?;
                 (potential_qty.min(order.qty), remaining_sum)
             };
 
-            remaining_sum -= traded_crncy;
-            total_traded_qty += traded_qty;
-            total_fees += (traded_crncy as f64 * fee_rate) as i64;
+            remaining_sum = remaining_sum.sub(traded_crncy);
+            total_traded_qty = total_traded_qty.checked_add_capped(traded_qty)?;
+            total_fees =
+                total_fees.checked_add_capped((traded_crncy.value as f64 * fee_rate) as i64)?;
         }
 
-        total_traded_sum -= remaining_sum;
+        total_traded_sum = total_traded_sum.sub(remaining_sum);
 
         Ok((total_traded_qty, total_traded_sum, total_fees))
     }

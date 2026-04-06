@@ -7,17 +7,17 @@ use drv_models::{
     new_types::instrument::InstrId,
     state::{
         candles::{Candle, CandlesAccountHeader},
-        community_account_header::CommunityAccountHeader,
         instrument::InstrAccountHeader,
+        masks::instr_mask::{InstrFlag, SimpleInstrMask},
+        root::RootState,
         token::TokenState,
         types::{
-            OrderSide,
+            CappedI64, OrderSide,
             account_type::{
-                COMMUNITY, INSTR, ROOT, SPOT_1M_CANDLES, SPOT_15M_CANDLES, SPOT_ASK_ORDERS,
-                SPOT_ASKS_TREE, SPOT_BID_ORDERS, SPOT_BIDS_TREE, SPOT_CLIENT_INFOS,
-                SPOT_CLIENT_INFOS2, SPOT_DAY_CANDLES, SPOT_LINES,
+                INSTR, ROOT, SPOT_1M_CANDLES, SPOT_15M_CANDLES, SPOT_ASK_ORDERS, SPOT_ASKS_TREE,
+                SPOT_BID_ORDERS, SPOT_BIDS_TREE, SPOT_CLIENT_INFOS, SPOT_CLIENT_INFOS2,
+                SPOT_DAY_CANDLES, SPOT_LINES,
             },
-            instr_mask::{InstrFlag, SimpleInstrMask},
         },
     },
 };
@@ -29,7 +29,7 @@ use solana_sdk::{account::Account, instruction::AccountMeta, pubkey::Pubkey};
 
 use crate::{
     amm::DeriverseAmm,
-    helper::{Helper, get_by_tag},
+    helper::{CappedNumber, Helper, get_by_tag},
     instrument::OffChainInstrAccountHeader,
     order_book::OrderBook,
 };
@@ -73,7 +73,7 @@ struct ContextAccounts {
     lines: Pubkey,
     bid_orders: Pubkey,
     ask_orders: Pubkey,
-    community_acc: Pubkey,
+    root_acc: Pubkey,
     a_mint: Pubkey,
     b_mint: Pubkey,
     pub candles: Option<(Pubkey, Pubkey, Pubkey)>,
@@ -85,7 +85,7 @@ impl From<ContextAccounts> for Vec<Pubkey> {
             value.instr_header,
             value.a_token_state_acc,
             value.b_token_state_acc,
-            value.community_acc,
+            value.root_acc,
             value.lines,
             value.bid_orders,
             value.ask_orders,
@@ -126,7 +126,7 @@ impl ContextAccounts {
                 instr_header.asset_token_id,
                 instr_header.crncy_token_id,
             ),
-            community_acc: Pubkey::new_acc(COMMUNITY),
+            root_acc: Pubkey::new_acc(ROOT),
             a_mint: instr_header.asset_mint,
             b_mint: instr_header.crncy_mint,
             candles: Some((
@@ -299,7 +299,7 @@ impl Amm for Deriverse {
             a_token_state_acc,
             b_token_state_acc,
             lines,
-            community_acc,
+            root_acc,
             a_mint,
             b_mint,
             bid_orders,
@@ -312,7 +312,7 @@ impl Amm for Deriverse {
         self.b_token_state = account_map.from_account(b_token_state_acc)?;
 
         self.fee_rate_factor = account_map
-            .from_account::<CommunityAccountHeader>(community_acc)?
+            .from_account::<RootState>(root_acc)?
             .spot_fee_rate as f64
             * FEE_RATE_STEP;
 
@@ -386,6 +386,7 @@ impl Amm for Deriverse {
 
         let px = instr_header.market_px();
 
+        // ask if we update price diff?
         let price = {
             let max_diff = if instr_header.mask.get_flag(InstrFlag::SimilarAssets) {
                 px >> 4
@@ -410,22 +411,27 @@ impl Amm for Deriverse {
             SWAP_FEE_RATE
         };
 
-        let mut client_tokens: i64 = 0;
-        let mut client_mints: i64 = 0;
-        let mut swap_fees: i64 = 0;
+        let mut client_tokens = CappedI64::new(0);
+        let mut client_mints = CappedI64::new(0);
+        let mut swap_fees = CappedI64::new(0);
+
+        // TODO validate quote_params.amount is never used
+        let input_amount = CappedI64::new_checked(quote_params.amount as i64)?;
 
         if buy && (price > px || order_book.cross(price, OrderSide::Ask)) {
-            let input_sum = (quote_params.amount as f64 / (1.0 + fee_rate + swap_fee_rate)) as i64;
+            let input_sum = CappedI64::new_checked(
+                (input_amount.value as f64 / (1.0 + fee_rate + swap_fee_rate)) as i64,
+            )?;
 
             if swap_fee_rate > 0.0 {
-                swap_fees = (input_sum as f64 * swap_fee_rate) as i64;
+                swap_fees = CappedI64::new((input_sum.value as f64 * swap_fee_rate) as i64);
             }
 
-            let estimated_fees = (quote_params.amount as i64 - input_sum - swap_fees).max(0);
+            let estimated_fees = (input_amount.sub(input_sum).sub(swap_fees)).max(0.into());
 
             let mut remaining_sum = input_sum;
-            let mut qty = 0_i64;
-            let mut total_fees = 0_i64;
+            let mut qty = CappedI64::new(0);
+            let mut total_fees = CappedI64::new(0);
             let mut amm_px;
             let traded_qty;
             let traded_mints;
@@ -455,29 +461,20 @@ impl Amm for Deriverse {
                         }
                         traded_mints = remaining_sum;
                     }
-                    remaining_sum -= traded_mints;
+                    remaining_sum = remaining_sum.sub(traded_mints);
 
-                    qty = qty
-                        .checked_add(traded_qty)
-                        .ok_or(anyhow!("Arithmetic Overflow"))?;
-                    amm.a_tokens = amm
-                        .a_tokens
-                        .checked_sub(traded_qty)
-                        .ok_or(anyhow!("Arithmetic Overflow"))?;
-                    amm.b_tokens = amm
-                        .b_tokens
-                        .checked_add(traded_mints)
-                        .ok_or(anyhow!("Arithmetic Overflow"))?;
+                    qty = qty.checked_add_capped(traded_qty)?;
+                    amm.a_tokens = amm.a_tokens.checked_sub_capped(traded_qty)?;
+                    amm.b_tokens = amm.b_tokens.checked_add_capped(traded_mints)?;
 
                     total_fees = total_fees
-                        .checked_add((traded_mints as f64 * fee_rate) as i64)
-                        .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        .checked_add_capped((traded_mints.value as f64 * fee_rate) as i64)?;
 
                     break;
                 }
 
                 if let Some((_, line)) = line {
-                    let line_sum = order_book.line_sum(&line, OrderSide::Ask, remaining_sum);
+                    let line_sum = order_book.line_sum(&line, OrderSide::Ask, remaining_sum)?;
 
                     // Proff of assumption - remaining_qty <= line_qty if remaining_sum <= line_sum
                     // remaining_qty =
@@ -501,20 +498,12 @@ impl Amm for Deriverse {
                                 }
                                 traded_mints = remaining_sum;
                             }
+                            remaining_sum = remaining_sum.sub(traded_mints);
 
-                            remaining_sum -= traded_mints;
-                            qty = qty
-                                .checked_add(traded_qty)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
+                            qty = qty.checked_add_capped(traded_qty)?;
 
-                            amm.a_tokens = amm
-                                .a_tokens
-                                .checked_sub(traded_qty)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
-                            amm.b_tokens = amm
-                                .b_tokens
-                                .checked_add(traded_mints)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
+                            amm.a_tokens = amm.a_tokens.checked_sub_capped(traded_qty)?;
+                            amm.b_tokens = amm.b_tokens.checked_add_capped(traded_mints)?;
                         } else if DeriverseAmm::line_is_unreachable(
                             price,
                             line.price,
@@ -526,70 +515,45 @@ impl Amm for Deriverse {
                                 break;
                             }
 
-                            remaining_sum -= traded_mints;
-                            qty = qty
-                                .checked_add(traded_qty)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
+                            remaining_sum = remaining_sum.sub(traded_mints);
+                            qty = qty.checked_add_capped(traded_qty)?;
 
-                            amm.a_tokens = amm
-                                .a_tokens
-                                .checked_sub(traded_qty)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
-                            amm.b_tokens = amm
-                                .b_tokens
-                                .checked_add(traded_mints)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
+                            amm.a_tokens = amm.a_tokens.checked_sub_capped(traded_qty)?;
+                            amm.b_tokens = amm.b_tokens.checked_add_capped(traded_mints)?;
                         } else {
                             traded_qty = amm.get_amm_qty(line.price, OrderSide::Ask)?;
                             traded_mints = amm.get_amm_sum(traded_qty, OrderSide::Ask)?;
                             if traded_qty != 0 && traded_mints != 0 {
-                                remaining_sum -= traded_mints;
-                                qty = qty
-                                    .checked_add(traded_qty)
-                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
+                                remaining_sum = remaining_sum.sub(traded_mints);
+                                qty = qty.checked_add_capped(traded_qty)?;
 
-                                amm.a_tokens = amm
-                                    .a_tokens
-                                    .checked_sub(traded_qty)
-                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
-                                amm.b_tokens = amm
-                                    .b_tokens
-                                    .checked_add(traded_mints)
-                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
+                                amm.a_tokens = amm.a_tokens.checked_sub_capped(traded_qty)?;
+                                amm.b_tokens = amm.b_tokens.checked_add_capped(traded_mints)?;
                             }
                             if remaining_sum > 0 {
-                                //let init_qty =
-                                //    (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
+                                let (traded_qty, _, traded_fees) = self.order_book.reversed_fill(
+                                    &line,
+                                    remaining_sum,
+                                    fee_rate,
+                                    OrderSide::Ask,
+                                )?;
 
-                                let (traded_qty, traded_sum, traded_fees) =
-                                    self.order_book.reversed_fill(
-                                        &line,
-                                        remaining_sum,
-                                        fee_rate,
-                                        OrderSide::Ask,
-                                    )?;
+                                qty = qty.checked_add_capped(traded_qty)?;
 
-                                qty = qty
-                                    .checked_add(traded_qty)
-                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
-
-                                total_fees = total_fees
-                                    .checked_add(traded_fees)
-                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
-                                remaining_sum = 0;
-                                //remaining_sum -= traded_sum;
+                                total_fees = total_fees.checked_add_capped(traded_fees)?;
+                                remaining_sum = CappedI64::new(0);
                             }
                         }
                         if traded_qty != 0 && traded_mints != 0 {
-                            total_fees = total_fees
-                                .checked_add((traded_mints as f64 * fee_rate) as i64)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
+                            total_fees = total_fees.checked_add_capped(
+                                (traded_mints.value as f64 * fee_rate) as i64,
+                            )?;
                         }
 
                         break;
                     }
 
-                    next_amm_px = amm.get_reversed_amm_px(remaining_sum - line_sum)?;
+                    next_amm_px = amm.get_reversed_amm_px(remaining_sum.sub(line_sum))?;
                     if DeriverseAmm::cover_line(next_amm_px, price, line.price, OrderSide::Ask) {
                         //let init_qty =
                         //    (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
@@ -604,15 +568,11 @@ impl Amm for Deriverse {
                             OrderSide::Ask,
                         )?;
 
-                        qty = qty
-                            .checked_add(traded_qty)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        qty = qty.checked_add_capped(traded_qty)?;
 
-                        total_fees = total_fees
-                            .checked_add(traded_fees)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        total_fees = total_fees.checked_add_capped(traded_fees)?;
 
-                        remaining_sum -= traded_sum;
+                        remaining_sum = remaining_sum.sub(traded_sum);
                         continue;
                     }
 
@@ -623,85 +583,70 @@ impl Amm for Deriverse {
                     traded_qty = amm.get_reversed_amm_qty(traded_mints)?;
 
                     if traded_qty != 0 && traded_mints != 0 {
-                        remaining_sum -= traded_mints;
-                        qty = qty
-                            .checked_add(traded_qty)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        remaining_sum = remaining_sum.sub(traded_mints);
+                        qty = qty.checked_add_capped(traded_qty)?;
 
-                        amm.a_tokens = amm
-                            .a_tokens
-                            .checked_sub(traded_qty)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
-                        amm.b_tokens = amm
-                            .b_tokens
-                            .checked_add(traded_mints)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        amm.a_tokens = amm.a_tokens.checked_sub_capped(traded_qty)?;
+                        amm.b_tokens = amm.b_tokens.checked_add_capped(traded_mints)?;
 
                         total_fees = total_fees
-                            .checked_add((traded_mints as f64 * fee_rate) as i64)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                            .checked_add_capped((traded_mints.value as f64 * fee_rate) as i64)?;
                     }
 
                     if DeriverseAmm::cover_line(amm_px, price, line.price, OrderSide::Ask) {
-                        //let init_qty =
-                        //    (remaining_sum as f64 * self.amm.df / line.price as f64) as i64;
-
-                        //let (traded_qty, traded_sum, traded_fees) =
-                        //    self.order_book
-                        //        .fill(&line, init_qty, fee_rate, OrderSide::Ask)?;
-
-                        let (traded_qty, traded_sum, traded_fees) = self.order_book.reversed_fill(
+                        let (traded_qty, _, traded_fees) = self.order_book.reversed_fill(
                             &line,
                             remaining_sum,
                             fee_rate,
                             OrderSide::Ask,
                         )?;
 
-                        qty = qty
-                            .checked_add(traded_qty)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        qty = qty.checked_add_capped(traded_qty)?;
 
-                        total_fees = total_fees
-                            .checked_add(traded_fees)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        total_fees = total_fees.checked_add_capped(traded_fees)?;
 
-                        remaining_sum = 0;
+                        remaining_sum = CappedI64::new(0);
                     }
 
                     break;
                 }
             }
 
-            client_tokens += qty;
+            client_tokens = client_tokens.checked_add_capped(qty)?;
 
             if remaining_sum == 1 {
                 if estimated_fees > 0 {
-                    total_fees = estimated_fees + 1;
+                    total_fees = estimated_fees.checked_add_capped(1)?;
                 } else {
-                    remaining_sum = 0;
+                    remaining_sum = CappedI64::new(0);
                 }
             } else if remaining_sum == 0 {
                 total_fees = estimated_fees;
             }
 
-            let traded_sum = input_sum - remaining_sum;
+            let traded_sum = input_sum.sub(remaining_sum);
 
-            total_fees = total_fees.max((traded_sum as f64 * fee_rate) as i64);
+            let protocol_estimated_fees =
+                CappedI64::new((traded_sum.value as f64 * fee_rate) as i64);
+            total_fees = total_fees.max(protocol_estimated_fees);
 
             if remaining_sum > 1 {
                 if exhausted && fee_rate > 0.0 {
-                    total_fees += 1;
+                    total_fees = total_fees.checked_add_capped(1)?;
                 }
                 if swap_fee_rate > 0.0 {
-                    swap_fees = (traded_sum as f64 * swap_fee_rate) as i64 + 1;
+                    swap_fees = CappedI64::new_checked(
+                        (traded_sum.value as f64 * swap_fee_rate) as i64 + 1,
+                    )?;
                 }
             }
 
-            client_mints -= traded_sum + total_fees + swap_fees;
+            client_mints =
+                client_mints.checked_sub_capped(traded_sum.add(total_fees).add(swap_fees))?;
         } else if !buy && (price < px || order_book.cross(price, OrderSide::Bid)) {
-            let mut remaining_qty = quote_params.amount as i64;
-            let mut sum = 0_i64;
-            let mut total_fees = 0_i64;
+            let mut remaining_qty = input_amount;
+            let mut sum = CappedI64::new(0);
+            let mut total_fees = CappedI64::new(0);
             let mut amm_px;
             let traded_qty;
             let traded_mints;
@@ -729,22 +674,14 @@ impl Amm for Deriverse {
                         traded_qty = remaining_qty;
                     }
 
-                    remaining_qty -= traded_qty;
-                    sum = sum
-                        .checked_add(traded_mints)
-                        .ok_or(anyhow!("Arithmetic Overflow"))?;
-                    amm.a_tokens = amm
-                        .a_tokens
-                        .checked_add(traded_qty)
-                        .ok_or(anyhow!("Arithmetic Overflow"))?;
-                    amm.b_tokens = amm
-                        .b_tokens
-                        .checked_sub(traded_mints)
-                        .ok_or(anyhow!("Arithmetic Overflow"))?;
+                    remaining_qty = remaining_qty.sub(traded_qty);
+                    sum = sum.checked_add_capped(traded_mints)?;
+                    amm.a_tokens = amm.a_tokens.checked_add_capped(traded_qty)?;
+                    amm.b_tokens = amm.b_tokens.checked_sub_capped(traded_mints)?;
 
                     total_fees = total_fees
-                        .checked_add((traded_mints as f64 * fee_rate) as i64)
-                        .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        .checked_add_capped((traded_mints.value as f64 * fee_rate) as i64)?;
+
                     break;
                 }
 
@@ -765,18 +702,11 @@ impl Amm for Deriverse {
                                 traded_qty = remaining_qty;
                             }
 
-                            remaining_qty -= traded_qty;
-                            sum = sum
-                                .checked_add(traded_mints)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
-                            amm.a_tokens = amm
-                                .a_tokens
-                                .checked_add(traded_qty)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
-                            amm.b_tokens = amm
-                                .b_tokens
-                                .checked_sub(traded_mints)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
+                            remaining_qty = remaining_qty.sub(traded_qty);
+
+                            sum = sum.checked_add_capped(traded_mints)?;
+                            amm.a_tokens = amm.a_tokens.checked_add_capped(traded_qty)?;
+                            amm.b_tokens = amm.b_tokens.checked_sub_capped(traded_mints)?;
                         } else if DeriverseAmm::line_is_unreachable(
                             price,
                             line.price,
@@ -787,35 +717,20 @@ impl Amm for Deriverse {
                             if traded_qty == 0 || traded_mints == 0 {
                                 break;
                             }
-                            remaining_qty -= traded_qty;
-                            sum = sum
-                                .checked_add(traded_mints)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
-                            amm.a_tokens = amm
-                                .a_tokens
-                                .checked_add(traded_qty)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
-                            amm.b_tokens = amm
-                                .b_tokens
-                                .checked_sub(traded_mints)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
+                            remaining_qty = remaining_qty.sub(traded_qty);
+                            sum = sum.checked_add_capped(traded_mints)?;
+                            amm.a_tokens = amm.a_tokens.checked_add_capped(traded_qty)?;
+                            amm.b_tokens = amm.b_tokens.checked_sub_capped(traded_mints)?;
                         } else {
                             traded_qty = amm.get_amm_qty(line.price, OrderSide::Bid)?;
                             traded_mints = amm.get_amm_sum(traded_qty, OrderSide::Bid)?;
 
                             if traded_qty != 0 && traded_mints != 0 {
-                                remaining_qty -= traded_qty;
-                                sum = sum
-                                    .checked_add(traded_mints)
-                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
-                                amm.a_tokens = amm
-                                    .a_tokens
-                                    .checked_add(traded_qty)
-                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
-                                amm.b_tokens = amm
-                                    .b_tokens
-                                    .checked_sub(traded_mints)
-                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
+                                remaining_qty = remaining_qty.sub(traded_qty);
+
+                                sum = sum.checked_add_capped(traded_mints)?;
+                                amm.a_tokens = amm.a_tokens.checked_add_capped(traded_qty)?;
+                                amm.b_tokens = amm.b_tokens.checked_sub_capped(traded_mints)?;
                             }
 
                             if remaining_qty > 0 {
@@ -826,40 +741,32 @@ impl Amm for Deriverse {
                                     OrderSide::Bid,
                                 )?;
 
-                                total_fees = total_fees
-                                    .checked_add(traded_fees)
-                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
-                                sum = sum
-                                    .checked_add(traded_sum)
-                                    .ok_or(anyhow!("Arithmetic Overflow"))?;
+                                total_fees = total_fees.checked_add_capped(traded_fees)?;
+                                sum = sum.checked_add_capped(traded_sum)?;
 
-                                remaining_qty -= traded_qty;
+                                remaining_qty = remaining_qty.sub(traded_qty);
                             }
                         }
 
                         if traded_mints != 0 && traded_qty != 0 {
-                            total_fees = total_fees
-                                .checked_add((traded_mints as f64 * fee_rate) as i64)
-                                .ok_or(anyhow!("Arithmetic Overflow"))?;
+                            total_fees = total_fees.checked_add_capped(
+                                (traded_mints.value as f64 * fee_rate) as i64,
+                            )?;
                         }
                         break;
                     }
 
-                    next_amm_px = amm.get_amm_px(remaining_qty - line.qty, OrderSide::Bid)?;
+                    next_amm_px = amm.get_amm_px(remaining_qty.sub(line.qty), OrderSide::Bid)?;
 
                     if DeriverseAmm::cover_line(next_amm_px, price, line.price, OrderSide::Bid) {
                         let (traded_qty, traded_sum, traded_fees) =
                             self.order_book
                                 .fill(&line, remaining_qty, fee_rate, OrderSide::Bid)?;
 
-                        total_fees = total_fees
-                            .checked_add(traded_fees)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
-                        sum = sum
-                            .checked_add(traded_sum)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        total_fees = total_fees.checked_add_capped(traded_fees)?;
+                        sum = sum.checked_add_capped(traded_sum)?;
 
-                        remaining_qty -= traded_qty;
+                        remaining_qty = remaining_qty.sub(traded_qty);
 
                         continue;
                     }
@@ -870,22 +777,14 @@ impl Amm for Deriverse {
                     traded_mints = amm.get_amm_sum(traded_qty, OrderSide::Bid)?;
 
                     if traded_qty != 0 && traded_mints != 0 {
-                        remaining_qty -= traded_qty;
-                        sum = sum
-                            .checked_add(traded_mints)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
-                        amm.a_tokens = amm
-                            .a_tokens
-                            .checked_add(traded_qty)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
-                        amm.b_tokens = amm
-                            .b_tokens
-                            .checked_sub(traded_mints)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        remaining_qty = remaining_qty.sub(traded_qty);
+
+                        sum = sum.checked_add_capped(traded_mints)?;
+                        amm.a_tokens = amm.a_tokens.checked_add_capped(traded_qty)?;
+                        amm.b_tokens = amm.b_tokens.checked_sub_capped(traded_mints)?;
 
                         total_fees = total_fees
-                            .checked_add((traded_mints as f64 * fee_rate) as i64)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                            .checked_add_capped((traded_mints.value as f64 * fee_rate) as i64)?;
                     }
 
                     if DeriverseAmm::cover_line(amm_px, price, line.price, OrderSide::Bid) {
@@ -893,27 +792,23 @@ impl Amm for Deriverse {
                             self.order_book
                                 .fill(&line, remaining_qty, fee_rate, OrderSide::Bid)?;
 
-                        total_fees = total_fees
-                            .checked_add(traded_fees)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
-                        sum = sum
-                            .checked_add(traded_sum)
-                            .ok_or(anyhow!("Arithmetic Overflow"))?;
+                        total_fees = total_fees.checked_add_capped(traded_fees)?;
+                        sum = sum.checked_add_capped(traded_sum)?;
 
-                        remaining_qty -= traded_qty;
+                        remaining_qty = remaining_qty.sub(traded_qty);
                     }
                 }
 
                 break;
             }
-            client_tokens -= quote_params.amount as i64 - remaining_qty;
-            client_mints += sum;
+            client_tokens = client_tokens.checked_sub_capped(input_amount.sub(remaining_qty))?;
+            client_mints = client_mints.checked_add_capped(sum)?;
 
             if swap_fee_rate > 0.0 {
-                swap_fees = (sum as f64 * swap_fee_rate) as i64;
+                swap_fees = CappedI64::new_checked((sum.value as f64 * swap_fee_rate) as i64)?;
             }
 
-            client_mints -= total_fees + swap_fees;
+            client_mints = client_mints.checked_sub_capped(total_fees.add(swap_fees))?;
         }
 
         if client_tokens == 0 || client_mints == 0 {
@@ -922,13 +817,13 @@ impl Amm for Deriverse {
 
         if buy {
             Ok(Quote {
-                in_amount: (-client_mints) as u64,
-                out_amount: client_tokens as u64,
+                in_amount: (-client_mints.value) as u64,
+                out_amount: client_tokens.value as u64,
             })
         } else {
             Ok(Quote {
-                in_amount: (-client_tokens) as u64,
-                out_amount: client_mints as u64,
+                in_amount: (-client_tokens.value) as u64,
+                out_amount: client_mints.value as u64,
             })
         }
     }
@@ -1013,7 +908,7 @@ impl Amm for Deriverse {
                 is_writable: true,
             },
             AccountMeta {
-                pubkey: self.accounts_ctx.instr_header,
+                pubkey: accounts_ctx.instr_header,
                 is_signer: false,
                 is_writable: true,
             },
@@ -1123,11 +1018,6 @@ impl Amm for Deriverse {
                 is_writable: true,
             },
             AccountMeta {
-                pubkey: accounts_ctx.community_acc,
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
                 pubkey: *a_account,
                 is_signer: false,
                 is_writable: true,
@@ -1203,7 +1093,7 @@ fn from_swap(swap: Swap, in_amount: u64) -> SwapData {
             input_crncy: (side == Side::Bid) as u8,
             instr_id: InstrId(instr_id),
             price: 0,
-            amount: in_amount as i64,
+            amount: CappedI64::new(in_amount as i64),
             ..SwapData::zeroed()
         }
     } else {
