@@ -11,8 +11,6 @@ pub mod tests {
         use drv_models::{
             constants::{DF, nulls::NULL_ORDER, trading_limitations::MAX_PRICE},
             state::{
-                candles::CandlesAccountHeader,
-                community_account_header::CommunityAccountHeader,
                 instrument::InstrAccountHeader,
                 root::RootState,
                 spots::spot_account_header::SpotTradeAccountHeaderNonGen,
@@ -21,11 +19,10 @@ pub mod tests {
             },
         };
         use serde_json::to_value;
-        use solana_client::client_error::reqwest::blocking::RequestBuilder;
         use solana_sdk::{account::Account, pubkey::Pubkey};
 
         use crate::{
-            Deriverse, InstructionBuilderParams, ParamsWrapper, SwapReferralParams,
+            Deriverse, InstructionBuilderParams, ParamsWrapper,
             helper::{CappedNumber, get_dec_factor},
             lines_linked_list::Lines,
             orders_linked_list::Orders,
@@ -632,14 +629,6 @@ pub mod tests {
                 default_account_with_data(bytes_of(&TokenState::zeroed()).to_vec()),
             );
 
-            if let Some(candles) = deriverse.accounts_ctx.candles {
-                let header = CandlesAccountHeader::<0>::zeroed();
-                let header = bytes_of(&header);
-                accounts_map.insert(candles.0, default_account_with_data(header.to_vec()));
-                accounts_map.insert(candles.1, default_account_with_data(header.to_vec()));
-                accounts_map.insert(candles.2, default_account_with_data(header.to_vec()));
-            }
-
             let mut new_deriverse = Deriverse::from_keyed_account(
                 &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
                 &AmmContext {
@@ -1046,14 +1035,6 @@ pub mod tests {
                     default_account_with_object(deriverse.instr_header.as_ref()),
                 );
 
-                if let Some(candles) = deriverse.accounts_ctx.candles {
-                    let header = CandlesAccountHeader::<0>::zeroed();
-                    let header = bytes_of(&header);
-                    accounts_map.insert(candles.0, default_account_with_data(header.to_vec()));
-                    accounts_map.insert(candles.1, default_account_with_data(header.to_vec()));
-                    accounts_map.insert(candles.2, default_account_with_data(header.to_vec()));
-                }
-
                 let mut new_deriverse = Deriverse::from_keyed_account(
                     &build_key_account(instruction_builder_params).unwrap(),
                     &AmmContext {
@@ -1212,14 +1193,6 @@ pub mod tests {
                     deriverse.accounts_ctx.instr_header,
                     default_account_with_object(deriverse.instr_header.as_ref()),
                 );
-
-                if let Some(candles) = deriverse.accounts_ctx.candles {
-                    let header = CandlesAccountHeader::<0>::zeroed();
-                    let header = bytes_of(&header);
-                    accounts_map.insert(candles.0, default_account_with_data(header.to_vec()));
-                    accounts_map.insert(candles.1, default_account_with_data(header.to_vec()));
-                    accounts_map.insert(candles.2, default_account_with_data(header.to_vec()));
-                }
 
                 let mut new_deriverse = Deriverse::from_keyed_account(
                     &build_key_account(InstructionBuilderParams { ata_init: false }).unwrap(),
@@ -1621,14 +1594,6 @@ pub mod tests {
                     default_account_with_object(deriverse.instr_header.as_ref()),
                 );
 
-                if let Some(candles) = deriverse.accounts_ctx.candles {
-                    let header = CandlesAccountHeader::<0>::zeroed();
-                    let header = bytes_of(&header);
-                    accounts_map.insert(candles.0, default_account_with_data(header.to_vec()));
-                    accounts_map.insert(candles.1, default_account_with_data(header.to_vec()));
-                    accounts_map.insert(candles.2, default_account_with_data(header.to_vec()));
-                }
-
                 let mut new_deriverse = Deriverse::from_keyed_account(
                     &build_key_account1(InstructionBuilderParams { ata_init: false }).unwrap(),
                     &AmmContext {
@@ -1724,8 +1689,7 @@ pub mod tests {
         };
         use drv_models::state::{
             client_primary_account_header::ClientPrimaryAccountHeader,
-            token::TokenState,
-            types::account_type::{INSTR, SPOT_1M_CANDLES, SPOT_15M_CANDLES, SPOT_DAY_CANDLES},
+            instrument::InstrAccountHeader, token::TokenState, types::account_type::INSTR,
         };
         use once_cell::sync::Lazy;
         use serde_json::to_value;
@@ -1910,35 +1874,16 @@ pub mod tests {
             println!("Bid Orders: {:?}", deriverse.order_book.bid_orders);
         }
 
-        fn extend_candles(asset_token_id: u32, crncy_token_id: u32) {
-            let extend_candles_ix_1m = ExtendCandlesBuilder::extend_candles(
+        fn extend_candles(instr_header: &InstrAccountHeader) {
+            let extend_candles = ExtendCandlesBuilder::extend_candles(
                 CLIENT_A.pubkey(),
-                SPOT_1M_CANDLES,
-                asset_token_id,
-                crncy_token_id,
+                instr_header.asset_token_id,
+                instr_header.crncy_token_decs_count,
+                instr_header.instr_id,
+                instr_header.maps_address,
             );
 
-            let extend_candles_ix_15m = ExtendCandlesBuilder::extend_candles(
-                CLIENT_A.pubkey(),
-                SPOT_15M_CANDLES,
-                asset_token_id,
-                crncy_token_id,
-            );
-            let extend_candles_ix_day = ExtendCandlesBuilder::extend_candles(
-                CLIENT_A.pubkey(),
-                SPOT_DAY_CANDLES,
-                asset_token_id,
-                crncy_token_id,
-            );
-
-            let mut tx = Transaction::new_with_payer(
-                &[
-                    extend_candles_ix_1m,
-                    extend_candles_ix_15m,
-                    extend_candles_ix_day,
-                ],
-                Some(&CLIENT_A.pubkey()),
-            );
+            let mut tx = Transaction::new_with_payer(&[extend_candles], Some(&CLIENT_A.pubkey()));
 
             tx.sign(
                 &[CLIENT_A.insecure_clone()],
