@@ -9,9 +9,8 @@ use drv_models::{
         types::{
             CappedI64, OrderType,
             account_type::{
-                COMMUNITY, INSTR, ROOT, SPOT_1M_CANDLES, SPOT_15M_CANDLES, SPOT_ASK_ORDERS,
-                SPOT_ASKS_TREE, SPOT_BID_ORDERS, SPOT_BIDS_TREE, SPOT_CLIENT_INFOS,
-                SPOT_CLIENT_INFOS2, SPOT_DAY_CANDLES, SPOT_LINES,
+                COMMUNITY, INSTR, ROOT, SPOT_ASK_ORDERS, SPOT_ASKS_TREE, SPOT_BID_ORDERS,
+                SPOT_BIDS_TREE, SPOT_CLIENT_INFOS, SPOT_LINES,
             },
         },
     },
@@ -50,10 +49,6 @@ pub struct NewSpotOrderContext {
     lines: Pubkey,
     maps: Pubkey,
     client_info: Pubkey,
-    client_info2: Pubkey,
-    candles_1m: Pubkey,
-    candles_15m: Pubkey,
-    candles_day: Pubkey,
     community: Pubkey,
     a_token_state: TokenState,
     instr_state: InstrAccountHeader,
@@ -112,14 +107,6 @@ impl Context for NewSpotOrderContext {
                 a_token_state.id,
                 b_token_state.id,
             ),
-            client_info2: Pubkey::new_spot_acc(
-                SPOT_CLIENT_INFOS2,
-                a_token_state.id,
-                b_token_state.id,
-            ),
-            candles_1m: Pubkey::new_spot_acc(SPOT_1M_CANDLES, a_token_state.id, b_token_state.id),
-            candles_15m: Pubkey::new_spot_acc(SPOT_15M_CANDLES, a_token_state.id, b_token_state.id),
-            candles_day: Pubkey::new_spot_acc(SPOT_DAY_CANDLES, a_token_state.id, b_token_state.id),
             community: Pubkey::new_acc(COMMUNITY),
             a_token_state,
             instr_state,
@@ -142,10 +129,7 @@ impl Context for NewSpotOrderContext {
             lines,
             maps,
             client_info,
-            client_info2,
-            candles_1m,
-            candles_15m,
-            candles_day,
+
             community,
             a_token_state,
 
@@ -213,26 +197,6 @@ impl Context for NewSpotOrderContext {
             },
             AccountMeta {
                 pubkey: *client_info,
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: *client_info2,
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: *candles_1m,
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: *candles_15m,
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: *candles_day,
                 is_signer: false,
                 is_writable: true,
             },

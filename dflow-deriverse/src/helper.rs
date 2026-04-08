@@ -1,9 +1,5 @@
 use drv_models::{
-    constants::{
-        MAX_NUMBER,
-        candles::{CandleParams, CandleRegister},
-        seeds::DRVS_SEED,
-    },
+    constants::{MAX_NUMBER, seeds::DRVS_SEED},
     new_types::version::Version,
     state::types::{CappedI64, account_type},
 };
@@ -100,20 +96,6 @@ impl Helper for Pubkey {
         let (acc, _) = Pubkey::find_program_address(seeds, &program_id);
         acc
     }
-}
-
-pub const fn get_by_tag<const TAG: u32>(container: CandleRegister) -> CandleParams {
-    let mut i = 0;
-
-    while i < container.candles.len() {
-        if container.candles[i].tag == TAG {
-            return container.candles[i];
-        }
-        i += 1;
-    }
-
-    // unreachable code
-    container.candles[0]
 }
 
 pub trait CappedNumber: Sized + Copy {

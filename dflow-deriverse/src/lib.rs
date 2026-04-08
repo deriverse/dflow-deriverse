@@ -6,7 +6,7 @@ use drv_models::{
     instruction_data::SwapData,
     new_types::instrument::InstrId,
     state::{
-        candles::{Candle, CandlesAccountHeader},
+        candles::Candle,
         instrument::InstrAccountHeader,
         masks::instr_mask::{InstrFlag, SimpleInstrMask},
         root::RootState,
@@ -14,9 +14,8 @@ use drv_models::{
         types::{
             CappedI64, OrderSide,
             account_type::{
-                INSTR, ROOT, SPOT_1M_CANDLES, SPOT_15M_CANDLES, SPOT_ASK_ORDERS, SPOT_ASKS_TREE,
-                SPOT_BID_ORDERS, SPOT_BIDS_TREE, SPOT_CLIENT_INFOS, SPOT_CLIENT_INFOS2,
-                SPOT_DAY_CANDLES, SPOT_LINES,
+                INSTR, ROOT, SPOT_ASK_ORDERS, SPOT_ASKS_TREE, SPOT_BID_ORDERS, SPOT_BIDS_TREE,
+                SPOT_CLIENT_INFOS, SPOT_LINES,
             },
         },
     },
@@ -29,7 +28,7 @@ use solana_sdk::{account::Account, instruction::AccountMeta, pubkey::Pubkey};
 
 use crate::{
     amm::DeriverseAmm,
-    helper::{CappedNumber, Helper, get_by_tag},
+    helper::{CappedNumber, Helper},
     instrument::OffChainInstrAccountHeader,
     order_book::OrderBook,
 };
@@ -76,7 +75,6 @@ struct ContextAccounts {
     root_acc: Pubkey,
     a_mint: Pubkey,
     b_mint: Pubkey,
-    pub candles: Option<(Pubkey, Pubkey, Pubkey)>,
 }
 
 impl From<ContextAccounts> for Vec<Pubkey> {
@@ -92,10 +90,6 @@ impl From<ContextAccounts> for Vec<Pubkey> {
             value.a_mint,
             value.b_mint,
         ];
-
-        if let Some(candles) = value.candles {
-            vec.extend_from_slice(&[candles.0, candles.1, candles.2]);
-        }
 
         vec
     }
@@ -129,23 +123,6 @@ impl ContextAccounts {
             root_acc: Pubkey::new_acc(ROOT),
             a_mint: instr_header.asset_mint,
             b_mint: instr_header.crncy_mint,
-            candles: Some((
-                Pubkey::new_spot_acc(
-                    SPOT_1M_CANDLES,
-                    instr_header.asset_token_id,
-                    instr_header.crncy_token_id,
-                ),
-                Pubkey::new_spot_acc(
-                    SPOT_15M_CANDLES,
-                    instr_header.asset_token_id,
-                    instr_header.crncy_token_id,
-                ),
-                Pubkey::new_spot_acc(
-                    SPOT_DAY_CANDLES,
-                    instr_header.asset_token_id,
-                    instr_header.crncy_token_id,
-                ),
-            )),
         }
     }
 }
@@ -167,36 +144,6 @@ pub struct ParamsWrapper {
     instruction_builder_params: InstructionBuilderParams,
 }
 
-#[derive(Debug, Clone, PartialEq, Zeroable)]
-pub struct CandleParams {
-    count: u32,
-    buffer_len: u32,
-    capacity: u32,
-}
-
-impl CandleParams {
-    pub fn new<const TAG: u32>(account: &Account) -> Self {
-        let header: &CandlesAccountHeader<0> =
-            from_bytes(&account.data[..std::mem::size_of::<CandlesAccountHeader<0>>()]);
-
-        let buffer_len = (account.data.len() - std::mem::size_of::<CandlesAccountHeader<0>>())
-            / std::mem::size_of::<Candle>();
-
-        Self {
-            count: header.count,
-            buffer_len: buffer_len as u32,
-            capacity: get_by_tag::<TAG>(CANDLES).capacity,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Zeroable)]
-pub struct Candles {
-    candle_1m: CandleParams,
-    candle_15m: CandleParams,
-    candle_day: CandleParams,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 struct Deriverse {
     accounts_ctx: ContextAccounts,
@@ -207,7 +154,6 @@ struct Deriverse {
     amm: DeriverseAmm,
     fee_rate_factor: f64,
     instruction_builder_params: InstructionBuilderParams,
-    candles: Option<Candles>,
     a_program_id: Pubkey,
     b_program_id: Pubkey,
 }
@@ -259,7 +205,6 @@ impl Amm for Deriverse {
             a_program_id: solana_system_interface::program::id(),
             b_program_id: solana_system_interface::program::id(),
             instruction_builder_params: params.instruction_builder_params,
-            candles: None,
         })
     }
 
@@ -304,7 +249,6 @@ impl Amm for Deriverse {
             b_mint,
             bid_orders,
             ask_orders,
-            candles,
         } = &self.accounts_ctx;
 
         *self.instr_header = account_map.from_account(instr_header)?;
@@ -346,24 +290,6 @@ impl Amm for Deriverse {
             .ok_or(anyhow!("Invalid provided address {}", b_mint))?;
         self.b_program_id = b_mint_acc.owner;
 
-        if let Some((candle_1m, candle_15m, candle_day)) = candles {
-            let candle_1m_acc = account_map
-                .get(candle_1m)
-                .ok_or(anyhow!("Invalid provided address {}", candle_1m))?;
-            let candle_15m_acc = account_map
-                .get(candle_15m)
-                .ok_or(anyhow!("Invalid provided address {}", candle_15m))?;
-            let candle_day_acc = account_map
-                .get(candle_day)
-                .ok_or(anyhow!("Invalid provided address {}", candle_day))?;
-
-            self.candles = Some(Candles {
-                candle_1m: CandleParams::new::<SPOT_1M_CANDLES>(&candle_1m_acc),
-                candle_15m: CandleParams::new::<SPOT_15M_CANDLES>(&candle_15m_acc),
-                candle_day: CandleParams::new::<SPOT_DAY_CANDLES>(&candle_day_acc),
-            })
-        }
-
         Ok(())
     }
 
@@ -386,7 +312,6 @@ impl Amm for Deriverse {
 
         let px = instr_header.market_px();
 
-        // ask if we update price diff?
         let price = {
             let max_diff = if instr_header.mask.get_flag(InstrFlag::SimilarAssets) {
                 px >> 4
@@ -975,42 +900,6 @@ impl Amm for Deriverse {
             AccountMeta {
                 pubkey: Pubkey::new_spot_acc(
                     SPOT_CLIENT_INFOS,
-                    instr_header.asset_token_id,
-                    instr_header.crncy_token_id,
-                ),
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: Pubkey::new_spot_acc(
-                    SPOT_CLIENT_INFOS2,
-                    instr_header.asset_token_id,
-                    instr_header.crncy_token_id,
-                ),
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: Pubkey::new_spot_acc(
-                    SPOT_1M_CANDLES,
-                    instr_header.asset_token_id,
-                    instr_header.crncy_token_id,
-                ),
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: Pubkey::new_spot_acc(
-                    SPOT_15M_CANDLES,
-                    instr_header.asset_token_id,
-                    instr_header.crncy_token_id,
-                ),
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: Pubkey::new_spot_acc(
-                    SPOT_DAY_CANDLES,
                     instr_header.asset_token_id,
                     instr_header.crncy_token_id,
                 ),
