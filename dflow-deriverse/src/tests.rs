@@ -124,42 +124,6 @@ pub mod tests {
         }
 
         impl Deriverse {
-            pub fn init_root_state(
-                &mut self,
-                fee_rate: u32,
-                account_metas: &mut AccountMap,
-            ) -> Result<()> {
-                let header = RootState {
-                    spot_fee_rate: fee_rate,
-                    ..Zeroable::zeroed()
-                };
-
-                account_metas.insert(
-                    self.accounts_ctx.root_acc,
-                    default_account_with_object(&header),
-                );
-
-                Ok(())
-            }
-
-            pub fn init_root(
-                &mut self,
-                fee_rate: u32,
-                account_metas: &mut AccountMap,
-            ) -> Result<()> {
-                let header = RootState {
-                    spot_fee_rate: fee_rate,
-                    ..Zeroable::zeroed()
-                };
-
-                account_metas.insert(
-                    self.accounts_ctx.root_acc,
-                    default_account_with_object(&header),
-                );
-
-                Ok(())
-            }
-
             pub fn init_order_book(
                 &mut self,
                 account_metas: &mut AccountMap,
@@ -168,12 +132,15 @@ pub mod tests {
                 bid_orders: Orders,
                 bid_begin_line: usize,
                 ask_begin_line: usize,
+                spot_fee_rate: u32,
             ) -> Result<()> {
                 self.instr_header.bid_lines_begin = bid_begin_line as u32;
                 self.instr_header.ask_lines_begin = ask_begin_line as u32;
 
                 self.instr_header.bid_lines_count = lines.len() as u32;
                 self.instr_header.ask_lines_count = lines.len() as u32;
+
+                self.instr_header.spot_fee_rate = spot_fee_rate as u8;
 
                 self.instr_header.best_ask = lines
                     .get(ask_begin_line)
@@ -592,7 +559,6 @@ pub mod tests {
                 },
             ];
 
-            deriverse.init_root_state(10, &mut accounts_map).unwrap();
             deriverse.init_amm(
                 110 * get_dec_factor(TOKEN_A.decs_count as u8),
                 11 * get_dec_factor(TOKEN_A.decs_count as u8),
@@ -605,6 +571,7 @@ pub mod tests {
                     bid_orders,
                     1,
                     2,
+                    10,
                 )
                 .unwrap();
 
@@ -992,7 +959,6 @@ pub mod tests {
 
                 assert_eq!(orders_sum, lines_sum);
 
-                deriverse.init_root_state(0, &mut accounts_map).unwrap();
                 deriverse.init_amm(0, 0);
                 deriverse
                     .init_order_book(
@@ -1002,6 +968,7 @@ pub mod tests {
                         bid_orders,
                         1,
                         2,
+                        0,
                     )
                     .unwrap();
 
@@ -1155,13 +1122,12 @@ pub mod tests {
 
                 let lines = vec![];
 
-                deriverse.init_root_state(0, &mut accounts_map).unwrap();
                 deriverse.init_amm(
                     1_000_000 * get_dec_factor(TOKEN_A.decs_count as u8),
                     10_000_000 * get_dec_factor(TOKEN_B.decs_count as u8),
                 );
                 deriverse
-                    .init_order_book(&mut accounts_map, lines.clone(), vec![], vec![], 0, 0)
+                    .init_order_book(&mut accounts_map, lines.clone(), vec![], vec![], 0, 0, 0)
                     .unwrap();
 
                 accounts_map.insert(
@@ -1545,7 +1511,6 @@ pub mod tests {
                     },
                 ];
 
-                deriverse.init_root_state(20, &mut accounts_map).unwrap();
                 deriverse.init_amm1(9542270844, 816055002);
 
                 deriverse
@@ -1556,6 +1521,7 @@ pub mod tests {
                         bid_orders,
                         6,
                         0,
+                        20,
                     )
                     .unwrap();
 
@@ -1687,13 +1653,15 @@ pub mod tests {
         use dflow_amm_interface::{
             Amm, AmmContext, ClockRef, KeyedAccount, SwapAndAccountMetas, SwapParams,
         };
+
         use drv_models::state::{
-            client_primary_account_header::ClientPrimaryAccountHeader,
-            instrument::InstrAccountHeader, token::TokenState, types::account_type::INSTR,
+            instrument::InstrAccountHeader,
+            token::TokenState,
+            types::account_type::{INSTR, TOKEN},
         };
         use once_cell::sync::Lazy;
         use serde_json::to_value;
-        use solana_client::{rpc_client::RpcClient, rpc_config::CommitmentConfig};
+        use solana_rpc_client::{api::config::CommitmentConfig, rpc_client::RpcClient};
         use solana_sdk::{
             instruction::Instruction,
             pubkey::Pubkey,
@@ -1708,6 +1676,7 @@ pub mod tests {
             custom_sdk::{
                 deposit::{DepositBuildContext, DepositContext},
                 extend_candles::ExtendCandlesBuilder,
+                migrate_ix::{MigrateBuildCtx, MigrateCtx},
                 new_spot_order::{NewSpotOrderBuildContext, NewSpotOrderContext},
                 traits::{Context, InstructionBuilder},
             },
@@ -1743,7 +1712,7 @@ pub mod tests {
             fn new_builder<U: Context>(
                 &self,
                 ctx: <U as Context>::Build,
-            ) -> Result<Box<U>, solana_client::client_error::ClientError> {
+            ) -> Result<Box<U>, solana_rpc_client_api::client_error::AnyhowError> {
                 U::build(self, ctx)
             }
         }
@@ -1786,16 +1755,16 @@ pub mod tests {
         // #[test]
         // fn instruction_builder() {
         //     let ix = RPC
-        //         .new_builder::<DepositContext>(DepositBuildContext {
-        //             signer: CLIENT_A.pubkey(),
-        //             token_mint: TOKEN_B,
-        //             amount: 100,
-        //             deposit_all: false,
+        //         .new_builder::<MigrateCtx>(MigrateBuildCtx {
+        //             admin: CLIENT_A.pubkey(),
+        //             a_token_mint: TOKEN_A,
+        //             b_token_mint: TOKEN_B,
         //         })
         //         .unwrap()
         //         .create_instruction();
 
-        //     let mut tx = Transaction::new_with_payer(&[ix], Some(&CLIENT_A.pubkey()));
+        //     let mut tx = Transaction::new_with_payer(ix.as_slice(), Some(&CLIENT_A.pubkey()));
+
         //     tx.sign(
         //         &[CLIENT_A.insecure_clone()],
         //         RPC.get_latest_blockhash().unwrap(),
@@ -1805,14 +1774,6 @@ pub mod tests {
         //         "Signature: {}",
         //         RPC.send_and_confirm_transaction(&tx).unwrap()
         //     );
-
-        //     let client_primary = {
-        //         let addr = CLIENT_A.pubkey().new_client_primary_acc();
-        //         let acc = RPC.get_account(&addr).unwrap();
-        //         unsafe { *(acc.data.as_ptr() as *const ClientPrimaryAccountHeader) }
-        //     };
-
-        //     println!("Client primary: {}", client_primary.id);
         // }
 
         pub fn init_deriverse() {
@@ -1828,7 +1789,7 @@ pub mod tests {
 
             let ix = builder.create_instruction();
 
-            let mut tx = Transaction::new_with_payer(&[ix], Some(&CLIENT_A.pubkey()));
+            let mut tx = Transaction::new_with_payer(ix.as_slice(), Some(&CLIENT_A.pubkey()));
             tx.sign(
                 &[CLIENT_A.insecure_clone()],
                 RPC.get_latest_blockhash().unwrap(),
@@ -2251,7 +2212,7 @@ pub mod tests {
         use drv_models::state::{token::TokenState, types::account_type::INSTR};
         use once_cell::sync::Lazy;
         use serde_json::to_value;
-        use solana_client::{rpc_client::RpcClient, rpc_config::CommitmentConfig};
+        use solana_rpc_client::{api::config::CommitmentConfig, rpc_client::RpcClient};
         use solana_sdk::pubkey::Pubkey;
 
         use crate::{

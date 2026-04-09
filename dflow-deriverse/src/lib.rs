@@ -72,18 +72,16 @@ struct ContextAccounts {
     lines: Pubkey,
     bid_orders: Pubkey,
     ask_orders: Pubkey,
-    root_acc: Pubkey,
     a_mint: Pubkey,
     b_mint: Pubkey,
 }
 
 impl From<ContextAccounts> for Vec<Pubkey> {
     fn from(value: ContextAccounts) -> Self {
-        let mut vec = vec![
+        let vec = vec![
             value.instr_header,
             value.a_token_state_acc,
             value.b_token_state_acc,
-            value.root_acc,
             value.lines,
             value.bid_orders,
             value.ask_orders,
@@ -120,7 +118,6 @@ impl ContextAccounts {
                 instr_header.asset_token_id,
                 instr_header.crncy_token_id,
             ),
-            root_acc: Pubkey::new_acc(ROOT),
             a_mint: instr_header.asset_mint,
             b_mint: instr_header.crncy_mint,
         }
@@ -244,7 +241,6 @@ impl Amm for Deriverse {
             a_token_state_acc,
             b_token_state_acc,
             lines,
-            root_acc,
             a_mint,
             b_mint,
             bid_orders,
@@ -255,10 +251,7 @@ impl Amm for Deriverse {
         self.a_token_state = account_map.from_account(a_token_state_acc)?;
         self.b_token_state = account_map.from_account(b_token_state_acc)?;
 
-        self.fee_rate_factor = account_map
-            .from_account::<RootState>(root_acc)?
-            .spot_fee_rate as f64
-            * FEE_RATE_STEP;
+        self.fee_rate_factor = self.instr_header.spot_fee_rate as f64 * FEE_RATE_STEP;
 
         let lines_acc = account_map
             .get(lines)
@@ -340,7 +333,6 @@ impl Amm for Deriverse {
         let mut client_mints = CappedI64::new(0);
         let mut swap_fees = CappedI64::new(0);
 
-        // TODO validate quote_params.amount is never used
         let input_amount = CappedI64::new_checked(quote_params.amount as i64)?;
 
         if buy && (price > px || order_book.cross(price, OrderSide::Ask)) {
@@ -803,22 +795,12 @@ impl Amm for Deriverse {
                 is_writable: true,
             },
             AccountMeta {
-                pubkey: root,
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
                 pubkey: instr_header.asset_mint,
                 is_signer: false,
                 is_writable: false,
             },
             AccountMeta {
                 pubkey: instr_header.crncy_mint,
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
-                pubkey: Pubkey::get_drv_auth(),
                 is_signer: false,
                 is_writable: false,
             },

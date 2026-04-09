@@ -1,4 +1,3 @@
-use solana_client::rpc_client::RpcClient;
 use solana_sdk::instruction::Instruction;
 
 pub trait BuildContext {}
@@ -10,16 +9,16 @@ where
     type Build: BuildContext;
 
     fn build(
-        rpc: &RpcClient,
+        rpc: &solana_rpc_client::rpc_client::RpcClient,
         build_ctx: Self::Build,
-    ) -> Result<Box<Self>, solana_client::client_error::ClientError>;
+    ) -> Result<Box<Self>, solana_rpc_client_api::client_error::AnyhowError>;
 
-    fn create_instruction(&self) -> Instruction;
+    fn create_instruction(&self) -> Vec<Instruction>;
 }
 
 pub trait InstructionBuilder {
     fn new_builder<U: Context>(
         &self,
         ctx: U::Build,
-    ) -> Result<Box<U>, solana_client::client_error::ClientError>;
+    ) -> Result<Box<U>, solana_rpc_client_api::client_error::AnyhowError>;
 }

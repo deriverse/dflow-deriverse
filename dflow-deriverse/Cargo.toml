@@ -9,7 +9,7 @@ anyhow = "1.0.100"
 bytemuck = { version = "1.23.0" }
 solana-sdk = { version = "3.0.0" }
 rust_decimal = "1.39.0"
-drv-models = { git = "ssh://git@github.com/deriverse/drv-smart-contract-common.git", tag = "v0.2.44" }
+drv-models = { git = "ssh://git@github.com/deriverse/drv-smart-contract-common.git", tag = "v0.2.47" }
 spl-token-interface = { version = "2.0.0" }
 spl-token-2022-interface = { version = "2.1.0" }
 solana-address-lookup-table-interface = { version = "3.0.0", features = [
@@ -23,11 +23,13 @@ serde_json = "1.0.148"
 serde = "1.0.219"
 
 [dev-dependencies]
-solana-client = "3.1.8"
+solana-rpc-client = "3.1.12"
+solana-rpc-client-api = "3.1.12"
 solana-system-interface = "3.0.0"
 ahash = "0.8.12"
 once_cell = "1.21.3"
 
 [features]
+default = ["rpc-test"]
 rpc-test = []
 mainnet-test = []
