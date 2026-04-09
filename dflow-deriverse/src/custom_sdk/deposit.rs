@@ -7,7 +7,7 @@ use drv_models::{
         types::{CappedI64, account_type::ROOT},
     },
 };
-use solana_client::rpc_client::RpcClient;
+use solana_rpc_client::rpc_client::RpcClient;
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -54,7 +54,7 @@ impl Context for DepositContext {
     fn build(
         rpc: &RpcClient,
         build_ctx: Self::Build,
-    ) -> Result<Box<Self>, solana_client::client_error::ClientError> {
+    ) -> Result<Box<Self>, solana_rpc_client::api::client_error::AnyhowError> {
         let DepositBuildContext {
             signer,
             token_mint,

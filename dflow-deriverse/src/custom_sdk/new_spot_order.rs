@@ -15,6 +15,7 @@ use drv_models::{
         },
     },
 };
+use solana_rpc_client::rpc_client::RpcClient;
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -60,9 +61,9 @@ impl Context for NewSpotOrderContext {
     type Build = NewSpotOrderBuildContext;
 
     fn build(
-        rpc: &solana_client::rpc_client::RpcClient,
+        rpc: &RpcClient,
         build_ctx: Self::Build,
-    ) -> Result<Box<Self>, solana_client::client_error::ClientError> {
+    ) -> Result<Box<Self>, solana_rpc_client::api::client_error::AnyhowError> {
         let NewSpotOrderBuildContext {
             signer,
             token_a_mint,
