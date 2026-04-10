@@ -1657,7 +1657,7 @@ pub mod tests {
         use drv_models::state::{
             instrument::InstrAccountHeader,
             token::TokenState,
-            types::account_type::{INSTR, TOKEN},
+            types::account_type::{INSTR, ROOT, TOKEN},
         };
         use once_cell::sync::Lazy;
         use serde_json::to_value;
@@ -1674,6 +1674,7 @@ pub mod tests {
         use crate::{
             Deriverse, InstructionBuilderParams, ParamsWrapper, SwapReferralParams,
             custom_sdk::{
+                close_candles::{CloseCandlesBuildCtx, CloseCandlesCtx},
                 deposit::{DepositBuildContext, DepositContext},
                 extend_candles::ExtendCandlesBuilder,
                 migrate_ix::{MigrateBuildCtx, MigrateCtx},
@@ -1752,29 +1753,45 @@ pub mod tests {
             assert!(current_slot > 0);
         }
 
-        // #[test]
-        // fn instruction_builder() {
-        //     let ix = RPC
-        //         .new_builder::<MigrateCtx>(MigrateBuildCtx {
-        //             admin: CLIENT_A.pubkey(),
-        //             a_token_mint: TOKEN_A,
-        //             b_token_mint: TOKEN_B,
-        //         })
-        //         .unwrap()
-        //         .create_instruction();
+        #[test]
+        fn instruction_builder() {
+            let ctx = RPC
+                .new_builder::<CloseCandlesCtx>(CloseCandlesBuildCtx {
+                    admin: CLIENT_A.pubkey(),
+                    a_token_mint: TOKEN_A,
+                    b_token_mint: TOKEN_B,
+                })
+                .unwrap();
 
-        //     let mut tx = Transaction::new_with_payer(ix.as_slice(), Some(&CLIENT_A.pubkey()));
+            let balance_before = RPC.get_account(&ctx.candle_1m).unwrap().lamports;
+            let client_balance_before = RPC.get_account(&CLIENT_A.pubkey()).unwrap().lamports;
 
-        //     tx.sign(
-        //         &[CLIENT_A.insecure_clone()],
-        //         RPC.get_latest_blockhash().unwrap(),
-        //     );
+            let ix = ctx.create_instruction();
 
-        //     println!(
-        //         "Signature: {}",
-        //         RPC.send_and_confirm_transaction(&tx).unwrap()
-        //     );
-        // }
+            let mut tx = Transaction::new_with_payer(ix.as_slice(), Some(&CLIENT_A.pubkey()));
+
+            tx.sign(
+                &[CLIENT_A.insecure_clone()],
+                RPC.get_latest_blockhash().unwrap(),
+            );
+
+            println!(
+                "Signature: {}",
+                RPC.send_and_confirm_transaction(&tx).unwrap()
+            );
+
+            let root_balance = RPC.get_account(&Pubkey::new_acc(ROOT)).unwrap().lamports;
+
+            println!(
+                "Candles balance before/after: {}/{}",
+                balance_before, balance_after
+            );
+
+            println!(
+                "Client balance before/after: {}/{}",
+                client_balance_before, client_balance_after
+            );
+        }
 
         pub fn init_deriverse() {
             let builder = RPC

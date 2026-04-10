@@ -1,3 +1,4 @@
+pub mod close_candles;
 pub mod deposit;
 pub mod extend_candles;
 pub mod migrate_ix;
