@@ -25,7 +25,8 @@ pub struct OrderBook {
     pub ask_orders: Orders,
     pub bid_begin_line: u32,
     pub ask_begin_line: u32,
-    pub total_lines_count: usize,
+    pub ask_lines_count: usize,
+    pub bid_line_count: usize,
     pub rdf: f64,
 }
 
@@ -63,9 +64,8 @@ impl OrderBook {
         OrderBook {
             bid_begin_line: instr_header.bid_lines_begin,
             ask_begin_line: instr_header.ask_lines_begin,
-            total_lines_count: instr_header
-                .ask_lines_count
-                .max(instr_header.bid_lines_count) as usize,
+            ask_lines_count: instr_header.ask_lines_count as usize,
+            bid_line_count: instr_header.bid_lines_count as usize,
             lines,
             bid_orders,
             ask_orders,
@@ -75,12 +75,12 @@ impl OrderBook {
 
     pub fn iter_bids<'a>(&'a self) -> LinesIter<'a> {
         self.lines
-            .iter_from(self.bid_begin_line, self.total_lines_count)
+            .iter_from(self.bid_begin_line, self.bid_line_count)
     }
 
     pub fn iter_asks<'a>(&'a self) -> LinesIter<'a> {
         self.lines
-            .iter_from(self.ask_begin_line, self.total_lines_count)
+            .iter_from(self.ask_begin_line, self.ask_lines_count)
     }
 
     fn begin_index(&self, side: OrderSide) -> usize {
