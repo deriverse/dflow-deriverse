@@ -1,15 +1,13 @@
 use anyhow::{Result, anyhow, bail};
-use bytemuck::{Pod, Zeroable, from_bytes};
+use bytemuck::{Pod, Zeroable};
 use drv_models::{
-    constants::{SWAP_FEE_RATE, candles::CANDLES, voting::FEE_RATE_STEP},
+    constants::{SWAP_FEE_RATE, voting::FEE_RATE_STEP},
     instruction_constants::{DrvInstruction, SwapInstruction},
     instruction_data::SwapData,
     new_types::instrument::InstrId,
     state::{
-        candles::Candle,
         instrument::InstrAccountHeader,
         masks::instr_mask::{InstrFlag, SimpleInstrMask},
-        root::RootState,
         token::TokenState,
         types::{
             CappedI64, OrderSide,
@@ -24,7 +22,7 @@ use drv_models::{
 use dflow_amm_interface::{AccountMap, Amm, Quote, Side, Swap, SwapAndAccountMetas, SwapParams};
 use serde::{Deserialize, Serialize};
 use serde_json::from_value;
-use solana_sdk::{account::Account, instruction::AccountMeta, pubkey::Pubkey};
+use solana_sdk::{instruction::AccountMeta, pubkey::Pubkey};
 
 use crate::{
     amm::DeriverseAmm,
@@ -786,8 +784,6 @@ impl Amm for Deriverse {
             );
         };
 
-        let root = Pubkey::new_acc(ROOT);
-
         let mut account_metas = vec![
             AccountMeta {
                 pubkey: *token_transfer_authority,
@@ -946,8 +942,9 @@ impl Amm for Deriverse {
     fn is_active(&self) -> bool {
         let suspended_instrument = self.instr_header.mask.get_flag(InstrFlag::Suspended);
 
-        let market_requirements =
-            self.order_book.total_lines_count != 0 || self.instr_header.ps != 0;
+        let market_requirements = self.order_book.ask_lines_count != 0
+            || self.order_book.bid_line_count != 0
+            || self.instr_header.ps != 0;
 
         let candles_requirements = !self
             .instr_header
