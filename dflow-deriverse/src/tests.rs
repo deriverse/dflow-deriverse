@@ -1229,10 +1229,10 @@ pub mod tests {
                 let diff = (result.out_amount as i64 - expected as i64).abs();
 
                 assert!(
-                    (diff as f64) < (expected as f64 * 0.000_001),
+                    (diff as f64) < (expected as f64 * 0.000_001 + 1.0),
                     "Calculations are not presize enough: diff ({}) > {}",
                     diff,
-                    expected as f64 * 0.000_001
+                    expected as f64 * 0.000_001 + 1.0
                 );
             }
         }
@@ -1591,7 +1591,7 @@ pub mod tests {
                 println!("Out Amount: {}", result.out_amount);
 
                 let expected_in_amount = 100000000;
-                let expected_out_amount = 8528443;
+                let expected_out_amount = 8528442;
                 println!("Expected in_amount: {}", expected_in_amount);
                 println!("Expected out_amount: {}", expected_out_amount);
 
@@ -1625,7 +1625,7 @@ pub mod tests {
                 println!("Out Amount: {}", result.out_amount);
 
                 let expected_in_amount = 68795502;
-                let expected_out_amount = 770731609;
+                let expected_out_amount = 770731608;
                 println!("Expected in_amount: {}", expected_in_amount);
                 println!("Expected out_amount: {}", expected_out_amount);
 

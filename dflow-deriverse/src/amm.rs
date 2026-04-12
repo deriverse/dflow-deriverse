@@ -87,10 +87,16 @@ impl DeriverseAmm {
                 if self.a_tokens == 0 {
                     0
                 } else {
-                    (self.b_tokens.value as i128)
-                        .checked_sub(self.k / (self.a_tokens.value + traded_qty) as i128)
+                    let new_asset_tokens = (self.a_tokens.value + traded_qty) as i128;
+                    let mut sum = (self.b_tokens.value as i128)
+                        .checked_sub(self.k / new_asset_tokens)
                         .ok_or(anyhow!("Arithmetic overflow"))?
-                        .max(0) as i64
+                        .max(0) as i64;
+                    if sum > 0 && new_asset_tokens * ((self.b_tokens.value - sum) as i128) < self.k
+                    {
+                        sum -= 1;
+                    }
+                    sum
                 }
             }
             OrderSide::Ask => {
@@ -130,7 +136,11 @@ impl DeriverseAmm {
                 .checked_add(traded_sum)
                 .ok_or(anyhow!("Arithmetic overflow"))?)
             .value as i128;
-            CappedI64::new_checked(self.a_tokens.value - (self.k / new_crncy) as i64)
+            let mut qty = self.a_tokens.value - (self.k / new_crncy) as i64;
+            if qty > 0 && new_crncy * ((self.a_tokens.value - qty) as i128) < self.k {
+                qty -= 1;
+            }
+            Ok(CappedI64::new(qty))
         }
     }
 
