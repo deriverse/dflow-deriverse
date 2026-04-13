@@ -180,7 +180,10 @@ impl OrderBook {
             let (traded_qty, traded_crncy) = if order.qty <= remaining_qty {
                 (order.qty, order.sum)
             } else {
-                (remaining_qty, self.trade_sum(remaining_qty, px)?)
+                (
+                    remaining_qty,
+                    self.trade_sum(remaining_qty, px)?.min(order.sum),
+                )
             };
 
             remaining_qty = remaining_qty.sub(traded_qty);
