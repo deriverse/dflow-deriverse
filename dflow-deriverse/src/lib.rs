@@ -456,7 +456,9 @@ impl Amm for Deriverse {
                                 qty = qty.checked_add_capped(traded_qty)?;
 
                                 total_fees = total_fees.checked_add_capped(traded_fees)?;
-                                remaining_sum = CappedI64::new(0);
+                                if remaining_sum > 0 {
+                                    remaining_sum = CappedI64::new(0);
+                                }
                             }
                         }
                         if traded_qty != 0 && traded_mints != 0 {
@@ -519,7 +521,8 @@ impl Amm for Deriverse {
                         qty = qty.checked_add_capped(traded_qty)?;
 
                         total_fees = total_fees.checked_add_capped(traded_fees)?;
-                        if amm_px <= price {
+
+                        if remaining_sum > 0 && amm_px <= price {
                             remaining_sum = CappedI64::new(0);
                         }
                     }
