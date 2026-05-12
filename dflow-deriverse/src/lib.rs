@@ -519,8 +519,9 @@ impl Amm for Deriverse {
                         qty = qty.checked_add_capped(traded_qty)?;
 
                         total_fees = total_fees.checked_add_capped(traded_fees)?;
-
-                        remaining_sum = CappedI64::new(0);
+                        if amm_px <= price {
+                            remaining_sum = CappedI64::new(0);
+                        }
                     }
 
                     break;
