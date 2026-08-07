@@ -149,12 +149,12 @@ impl DeriverseAmm {
             Ok(CappedI64::new(0))
         } else {
             CappedI64::new_checked(
-                -((self
+                (-((self
                     .b_tokens
                     .checked_sub(((self.k as f64 * price as f64 / self.df).sqrt()) as i64))
                 .ok_or(anyhow!("Arithmetic overflow"))?)
-                .value
-                .max(0),
+                .value)
+                    .max(0),
             )
         }
     }
