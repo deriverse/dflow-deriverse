@@ -527,10 +527,6 @@ impl Amm for Deriverse {
                 }
             }
 
-            if remaining_sum < 0 {
-                bail!("Match engine failed")
-            }
-
             client_tokens = client_tokens.checked_add_capped(qty)?;
 
             if remaining_sum == 1 {
@@ -719,10 +715,6 @@ impl Amm for Deriverse {
                 }
 
                 break;
-            }
-
-            if remaining_qty < 0 {
-                bail!("Match engine failed")
             }
 
             client_tokens = client_tokens.checked_sub_capped(input_amount.sub(remaining_qty))?;
